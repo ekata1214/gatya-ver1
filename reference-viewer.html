@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>r2 reference</title>
+  <style>
+    * { margin: 0; box-sizing: border-box; }
+    body { background: #111; color: #fff; font: 14px system-ui, sans-serif; padding: 12px; }
+    #wrap { max-width: 420px; margin: 0 auto; }
+    video { width: 100%; background: #000; display: block; }
+    #t { margin: 8px 0; }
+    input[type=range] { width: 100%; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <video id="v" src="./reference-r2-24fps.mp4" playsinline muted></video>
+    <p id="t">0.00s</p>
+    <input id="seek" type="range" min="0" max="1917" value="0" step="1" />
+  </div>
+  <script>
+    const v = document.getElementById('v');
+    const seek = document.getElementById('seek');
+    const t = document.getElementById('t');
+    v.addEventListener('loadedmetadata', () => {
+      seek.max = Math.floor(v.duration * 1000);
+      t.textContent = `0.00 / ${v.duration.toFixed(2)}s`;
+    });
+    seek.addEventListener('input', () => {
+      v.pause();
+      v.currentTime = seek.value / 1000;
+      t.textContent = `${v.currentTime.toFixed(2)} / ${v.duration.toFixed(2)}s`;
+    });
+    window.seekRef = (sec) => {
+      v.pause();
+      v.currentTime = sec;
+      seek.value = Math.round(sec * 1000);
+      t.textContent = `${v.currentTime.toFixed(2)} / ${v.duration.toFixed(2)}s`;
+    };
+  </script>
+</body>
+</html>

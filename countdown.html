@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>炎カウントダウン</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&display=swap" rel="stylesheet" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #000;
+      overflow: hidden;
+      font-family: "Black Han Sans", sans-serif;
+    }
+    #stage {
+      position: fixed; inset: 0;
+      display: grid; place-items: center;
+    }
+    .digit {
+      position: absolute;
+      font-size: clamp(72px, 22vw, 140px);
+      font-weight: 900;
+      line-height: 1;
+      opacity: 0;
+      transform: scale(0.7);
+      will-change: transform, opacity;
+      -webkit-text-stroke: 10px #000;
+      paint-order: stroke fill;
+      background: linear-gradient(
+        180deg,
+        #fff6a0 0%,
+        #ffb300 22%,
+        #ff5500 48%,
+        #cc1200 72%,
+        #660800 100%
+      );
+      background-size: 100% 220%;
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      animation:
+        fire-shift 0.45s linear infinite,
+        digit-cycle 1.333s ease-in-out forwards;
+      filter: drop-shadow(0 6px 18px rgba(255, 80, 0, 0.35));
+    }
+    @keyframes fire-shift {
+      0%   { background-position: 0% 0%; }
+      100% { background-position: 0% 100%; }
+    }
+    @keyframes digit-cycle {
+      0%     { opacity: 1; transform: scale(0.7); }
+      15%    { opacity: 1; transform: scale(1.1); }
+      24.75% { opacity: 1; transform: scale(1); }
+      77.3%  { opacity: 1; transform: scale(1); }
+      100%   { opacity: 0; transform: scale(0); }
+    }
+    #last-wrap {
+      position: absolute;
+      display: flex;
+      gap: 0.06em;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+    }
+    #last-wrap.play {
+      opacity: 1;
+      animation: last-wrap-cycle 1.333s ease-in-out forwards;
+    }
+    @keyframes last-wrap-cycle {
+      0%     { opacity: 1; transform: scale(0.7); }
+      15%    { opacity: 1; transform: scale(1.1); }
+      24.75% { opacity: 1; transform: scale(1); }
+      77.3%  { opacity: 1; transform: scale(1); }
+      100%   { opacity: 0; transform: scale(0); }
+    }
+    .last-char {
+      font-size: clamp(52px, 16vw, 100px);
+      font-weight: 900;
+      line-height: 1;
+      -webkit-text-stroke: 8px #000;
+      paint-order: stroke fill;
+      background: linear-gradient(
+        180deg,
+        #fff6a0 0%,
+        #ffb300 22%,
+        #ff5500 48%,
+        #cc1200 72%,
+        #660800 100%
+      );
+      background-size: 100% 220%;
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      animation: fire-shift 0.45s linear infinite;
+      filter: drop-shadow(0 5px 14px rgba(255, 80, 0, 0.35));
+      opacity: 0;
+    }
+    #last-wrap.play .last-char {
+      animation: fire-shift 0.45s linear infinite, last-fly-in 0.38s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    }
+    #last-wrap.play .last-char:nth-child(1) { animation-delay: 0s, 0s; --from-x: -3.2em; --from-y: -1.8em; }
+    #last-wrap.play .last-char:nth-child(2) { animation-delay: 0s, 0.04s; --from-x: 3.2em; --from-y: -1.6em; }
+    #last-wrap.play .last-char:nth-child(3) { animation-delay: 0s, 0.08s; --from-x: -2.8em; --from-y: 1.8em; }
+    #last-wrap.play .last-char:nth-child(4) { animation-delay: 0s, 0.12s; --from-x: 3em; --from-y: 1.6em; }
+    @keyframes last-fly-in {
+      0%   { opacity: 0; transform: translate(var(--from-x), var(--from-y)) scale(0.5) rotate(-18deg); }
+      70%  { opacity: 1; transform: translate(0, 0) scale(1.05) rotate(0deg); }
+      100% { opacity: 1; transform: translate(0, 0) scale(1) rotate(0deg); }
+    }
+    #replay {
+      position: fixed;
+      bottom: max(20px, env(safe-area-inset-bottom));
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 12px 28px;
+      border: none;
+      border-radius: 999px;
+      background: linear-gradient(180deg, #e63946, #b91c1c);
+      color: #fff;
+      font-family: inherit;
+      font-size: 15px;
+      cursor: pointer;
+      z-index: 10;
+    }
+    #replay:active { transform: translateX(-50%) scale(0.96); }
+  </style>
+</head>
+<body>
+  <div id="stage" aria-live="polite"></div>
+  <button id="replay" type="button">もう一度</button>
+  <script>
+    const SEQUENCE = ['5', '4', '3', '2', '1', 'LAST'];
+    const STEP = 8 / 6; // 1.333...
+    const stage = document.getElementById('stage');
+    const replayBtn = document.getElementById('replay');
+
+    function clearStage() {
+      stage.innerHTML = '';
+    }
+
+    function showDigit(char, delay) {
+      const el = document.createElement('div');
+      el.className = 'digit';
+      el.textContent = char;
+      el.style.animationDelay = `${delay}s, ${delay}s`;
+      stage.appendChild(el);
+      return el;
+    }
+
+    function showLast(delay) {
+      const wrap = document.createElement('div');
+      wrap.id = 'last-wrap';
+      'LAST'.split('').forEach((ch) => {
+        const span = document.createElement('span');
+        span.className = 'last-char';
+        span.textContent = ch;
+        wrap.appendChild(span);
+      });
+      stage.appendChild(wrap);
+      requestAnimationFrame(() => {
+        wrap.style.animationDelay = `${delay}s`;
+        wrap.classList.add('play');
+        wrap.querySelectorAll('.last-char').forEach((c) => {
+          const base = delay;
+          const i = [...wrap.children].indexOf(c);
+          c.style.animationDelay = `0s, ${base + i * 0.04}s`;
+        });
+      });
+      return wrap;
+    }
+
+    function play() {
+      clearStage();
+      SEQUENCE.forEach((item, i) => {
+        const t = i * STEP;
+        if (item === 'LAST') showLast(t);
+        else showDigit(item, t);
+      });
+    }
+
+    replayBtn.addEventListener('click', play);
+    play();
+  </script>
+</body>
+</html>

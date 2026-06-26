@@ -1,0 +1,30 @@
+{
+  "ease": "power2.inOut",
+  "camera": { "fov": 42, "position": [0, 0, 9], "lookAt": [0, 0, 0] },
+  "card": {
+    "height": 1.82,
+    "aspect": 0.72,
+    "hexRadius": 1.05,
+    "tiltX": -0.36,
+    "enterY": -5.8,
+    "centerY": -0.06,
+    "exitY": 8.0,
+    "floatAmp": 0.04,
+    "floatPeriod": 1.5,
+    "telopBouncePx": 14,
+    "telopBouncePeriod": 1.5,
+    "resultBouncePx": 18,
+    "resultBouncePeriod": 2.0
+  },
+  "scenes": {
+    "FIRE_ONLY":      { "start": 0.0,  "duration": 0.5 },
+    "CARD_SPAWN":     { "start": 0.5,  "duration": 1.0 },
+    "CARD_DISAPPEAR": { "start": 1.5,  "duration": 0.5 },
+    "SSR_DROP":       { "start": 2.0,  "duration": 0.85 },
+    "TITLE_SHOW":     { "start": 2.85, "duration": 3.0 },
+    "TITLE_OUT":      { "start": 5.85, "duration": 0.55 },
+    "BLACKOUT":       { "duration": 0.8 },
+    "SSR_RESULT":     { "duration": 2.8 },
+    "WHITEOUT":       { "duration": 0.7 }
+  }
+}

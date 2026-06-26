@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>墨汁スプラッター生成（2D・3層）</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #e0e0e0;
+      font-family: system-ui, sans-serif;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 10px;
+    }
+    #stage {
+      position: relative;
+      width: min(100vw - 20px, calc((100vh - 110px) * 1080 / 1920));
+      height: min(100vh - 110px, calc((100vw - 20px) * 1920 / 1080));
+      aspect-ratio: 1080 / 1920;
+      background: #fff;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.1);
+      overflow: hidden;
+    }
+    #preview { display: block; width: 100%; height: 100%; }
+    #toolbar { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+    button {
+      padding: 10px 16px; border: none; border-radius: 999px;
+      background: #111; color: #fff; font-size: 13px; cursor: pointer;
+    }
+    button.secondary { background: #555; }
+    button.active { background: #b91c1c; }
+    button:active { transform: scale(0.97); }
+    #info { font-size: 12px; color: #666; text-align: center; max-width: 90vw; }
+  </style>
+</head>
+<body>
+  <div id="stage"><canvas id="preview"></canvas></div>
+  <div id="toolbar">
+    <button id="btn-regen" type="button">再生成</button>
+    <button id="btn-bg" class="secondary active" type="button">背景: 白（確認用）</button>
+    <button id="btn-layer" class="secondary" type="button">レイヤー: 合成</button>
+    <button id="btn-dl-alpha" type="button">透過PNG</button>
+    <button id="btn-dl-white" class="secondary" type="button">白背景PNG</button>
+  </div>
+  <p id="info">—</p>
+
+  <script type="module">
+    const VIEW_W = 1080;
+    const VIEW_H = 1920;
+
+    const preview = document.getElementById('preview');
+    const stageEl = document.getElementById('stage');
+    const infoEl = document.getElementById('info');
+    const btnRegen = document.getElementById('btn-regen');
+    const btnBg = document.getElementById('btn-bg');
+    const btnLayer = document.getElementById('btn-layer');
+    const btnDlAlpha = document.getElementById('btn-dl-alpha');
+    const btnDlWhite = document.getElementById('btn-dl-white');
+
+    const LAYER_NAMES = ['合成', '奥', '中間', '手前'];
+    let viewMode = 0;
+    let currentSeed = 303;
+    let whitePreview = true;
+    let cachedLayers = null;
+
+    function mulberry32(seed) {
+      let t = seed >>> 0;
+      return () => {
+        t += 0x6d2b79f5;
+        let r = Math.imul(t ^ (t >>> 15), t | 1);
+        r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
+        return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    function randInt(rng, min, max) {
+      return min + Math.floor(rng() * (max - min + 1));
+    }
+
+    function randRange(rng, min, max) {
+      return min + (max - min) * rng();
+    }
+
+    /** 有機的な液だまり（30〜80頂点・半径ばらつき0.4〜1.8） */
+    function drawIrregularBlob(ctx, x, y, baseR, rng) {
+      const n = randInt(rng, 30, 80);
+      const pts = [];
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2 + (rng() - 0.5) * 0.25;
+        const rr = baseR * randRange(rng, 0.4, 1.8);
+        pts.push({ x: x + Math.cos(a) * rr, y: y + Math.sin(a) * rr });
+      }
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 0; i < pts.length; i++) {
+        const p0 = pts[i];
+        const p1 = pts[(i + 1) % pts.length];
+        const mx = (p0.x + p1.x) * 0.5;
+        const my = (p0.y + p1.y) * 0.5;
+        ctx.quadraticCurveTo(p0.x, p0.y, mx, my);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    /** 周囲の飛沫シミ */
+    function drawDroplets(ctx, cx, cy, spread, count, minR, maxR, rng) {
+      for (let i = 0; i < count; i++) {
+        const a = rng() * Math.PI * 2;
+        const d = Math.sqrt(rng()) * spread;
+        const r = randRange(rng, minR, maxR);
+        drawIrregularBlob(ctx, cx + Math.cos(a) * d, cy + Math.sin(a) * d, r, rng);
+      }
+    }
+
+    /** にじんだ大きなシミ（重ね塗り） */
+    function drawInkPuddle(ctx, x, y, size, rng) {
+      const passes = randInt(rng, 3, 6);
+      for (let i = 0; i < passes; i++) {
+        const ox = (rng() - 0.5) * size * 0.4;
+        const oy = (rng() - 0.5) * size * 0.4;
+        const r = size * randRange(rng, 0.5, 1.05);
+        drawIrregularBlob(ctx, x + ox, y + oy, r, rng);
+      }
+    }
+
+    /** 補助：短い飛び散り線（全体で0〜6本まで） */
+    function drawRareSplatterLine(ctx, x, y, maxLen, rng) {
+      const len = maxLen * randRange(rng, 0.15, 0.45);
+      const angle = rng() * Math.PI * 2;
+      const w = Math.max(0.6, maxLen * randRange(rng, 0.012, 0.035));
+      ctx.lineCap = 'round';
+      ctx.lineWidth = w;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + Math.cos(angle) * len, y + Math.sin(angle) * len);
+      ctx.stroke();
+      const tipR = w * randRange(rng, 0.4, 0.9);
+      drawIrregularBlob(ctx, x + Math.cos(angle) * len, y + Math.sin(angle) * len, tipR, rng);
+    }
+
+    /** 1か所のスプラッター（シミ主体） */
+    function drawInkCluster(ctx, x, y, size, rng, opts = {}) {
+      const {
+        largeMul = 1,
+        dropletMul = 1,
+        radialBudget = { n: 0 },
+      } = opts;
+
+      drawInkPuddle(ctx, x, y, size * largeMul, rng);
+
+      const satellite = randInt(rng, 2, 5);
+      for (let i = 0; i < satellite; i++) {
+        const a = rng() * Math.PI * 2;
+        const d = size * randRange(rng, 0.35, 0.95);
+        const r = size * randRange(rng, 0.12, 0.38);
+        drawIrregularBlob(ctx, x + Math.cos(a) * d, y + Math.sin(a) * d, r, rng);
+      }
+
+      const drops = randInt(rng, 6, 16);
+      drawDroplets(
+        ctx, x, y,
+        size * randRange(rng, 0.8, 1.5),
+        Math.floor(drops * dropletMul),
+        size * 0.02,
+        size * 0.12,
+        rng,
+      );
+
+      if (radialBudget.n > 0 && rng() < 0.35) {
+        drawRareSplatterLine(ctx, x, y, size, rng);
+        radialBudget.n -= 1;
+      }
+    }
+
+    function scatterDroplets(ctx, w, h, rng, count, minR, maxR) {
+      for (let i = 0; i < count; i++) {
+        drawIrregularBlob(ctx, rng() * w, rng() * h, randRange(rng, minR, maxR), rng);
+      }
+    }
+
+    function placePoint(rng, w, h, zone) {
+      if (zone === 'edge') {
+        const e = rng();
+        if (e < 0.25) return { x: w * (0.02 + rng() * 0.14), y: h * (0.08 + rng() * 0.84) };
+        if (e < 0.5) return { x: w * (0.86 + rng() * 0.12), y: h * (0.08 + rng() * 0.84) };
+        if (e < 0.75) return { x: w * (0.08 + rng() * 0.84), y: h * (0.02 + rng() * 0.11) };
+        return { x: w * (0.08 + rng() * 0.84), y: h * (0.87 + rng() * 0.11) };
+      }
+      if (zone === 'center') {
+        return { x: w * (0.28 + rng() * 0.44), y: h * (0.26 + rng() * 0.4) };
+      }
+      return { x: w * (0.05 + rng() * 0.9), y: h * (0.05 + rng() * 0.9) };
+    }
+
+    function buildLayerCounts(seed) {
+      const rng = mulberry32(seed);
+      return {
+        large: randInt(rng, 6, 12),
+        medium: randInt(rng, 25, 50),
+        small: randInt(rng, 80, 160),
+        radial: randInt(rng, 0, 6),
+      };
+    }
+
+    function splitCounts(total, ratios) {
+      const sum = ratios.reduce((a, b) => a + b, 0);
+      const out = ratios.map((r) => Math.floor((total * r) / sum));
+      let rem = total - out.reduce((a, b) => a + b, 0);
+      for (let i = 0; rem > 0; i++, rem--) out[i % out.length]++;
+      return out;
+    }
+
+    /** 奥：小飛沫・薄め */
+    function generateBackgroundInk(seed, counts) {
+      const c = document.createElement('canvas');
+      c.width = VIEW_W;
+      c.height = VIEW_H;
+      const ctx = c.getContext('2d');
+      const rng = mulberry32(seed + 11);
+
+      const [lg, md, sm] = splitCounts(counts.large + counts.medium + counts.small, [1, 3, 9]);
+      const radialBudget = { n: 0 };
+
+      ctx.fillStyle = '#000';
+      ctx.strokeStyle = '#000';
+      ctx.globalAlpha = randRange(rng, 0.25, 0.55);
+
+      scatterDroplets(ctx, VIEW_W, VIEW_H, rng, sm, 1.2, 5.5);
+
+      for (let i = 0; i < md; i++) {
+        const p = placePoint(rng, VIEW_W, VIEW_H, 'any');
+        drawInkCluster(ctx, p.x, p.y, VIEW_W * randRange(rng, 0.012, 0.028), rng, {
+          largeMul: 0.7,
+          dropletMul: 0.6,
+          radialBudget,
+        });
+      }
+
+      for (let i = 0; i < lg; i++) {
+        const p = placePoint(rng, VIEW_W, VIEW_H, 'any');
+        drawInkPuddle(ctx, p.x, p.y, VIEW_W * randRange(rng, 0.018, 0.035), rng);
+      }
+
+      ctx.globalAlpha = 1;
+      return c;
+    }
+
+    /** 中間：メインの大きなシミ・シャープ */
+    function generateMiddleInk(seed, counts) {
+      const c = document.createElement('canvas');
+      c.width = VIEW_W;
+      c.height = VIEW_H;
+      const ctx = c.getContext('2d');
+      const rng = mulberry32(seed + 29);
+
+      const [lg, md, sm] = splitCounts(counts.large + counts.medium + counts.small, [5, 5, 3]);
+      const radialBudget = { n: Math.ceil(counts.radial * 0.6) };
+
+      ctx.fillStyle = '#000';
+      ctx.strokeStyle = '#000';
+      ctx.globalAlpha = randRange(rng, 0.9, 1);
+
+      for (let i = 0; i < lg; i++) {
+        const p = placePoint(rng, VIEW_W, VIEW_H, i < 2 ? 'center' : 'any');
+        const size = VIEW_W * randRange(rng, 0.055, 0.11);
+        drawInkCluster(ctx, p.x, p.y, size, rng, { largeMul: 1.15, dropletMul: 1.2, radialBudget });
+      }
+
+      for (let i = 0; i < md; i++) {
+        const p = placePoint(rng, VIEW_W, VIEW_H, 'any');
+        drawInkCluster(ctx, p.x, p.y, VIEW_W * randRange(rng, 0.022, 0.05), rng, { radialBudget });
+      }
+
+      scatterDroplets(ctx, VIEW_W, VIEW_H, rng, sm, 2, 9);
+
+      ctx.globalAlpha = 1;
+      return c;
+    }
+
+    /** 手前：大きめ・画面端・ぼかし */
+    function generateForegroundInk(seed, counts) {
+      const scratch = document.createElement('canvas');
+      scratch.width = VIEW_W;
+      scratch.height = VIEW_H;
+      const ctx = scratch.getContext('2d');
+      const rng = mulberry32(seed + 47);
+
+      const [lg, md, sm] = splitCounts(counts.large + counts.medium + counts.small, [3, 4, 2]);
+      const radialBudget = { n: counts.radial - Math.ceil(counts.radial * 0.6) };
+
+      ctx.fillStyle = '#000';
+      ctx.strokeStyle = '#000';
+      ctx.globalAlpha = randRange(rng, 0.6, 0.85);
+
+      for (let i = 0; i < lg; i++) {
+        const p = placePoint(rng, VIEW_W, VIEW_H, 'edge');
+        drawInkCluster(ctx, p.x, p.y, VIEW_W * randRange(rng, 0.08, 0.14), rng, {
+          largeMul: 1.2,
+          dropletMul: 1,
+          radialBudget,
+        });
+      }
+
+      for (let i = 0; i < md; i++) {
+        const p = placePoint(rng, VIEW_W, VIEW_H, 'edge');
+        drawInkCluster(ctx, p.x, p.y, VIEW_W * randRange(rng, 0.035, 0.07), rng, { radialBudget });
+      }
+
+      scatterDroplets(ctx, VIEW_W, VIEW_H, rng, sm, 2.5, 11);
+
+      ctx.globalAlpha = 1;
+
+      const out = document.createElement('canvas');
+      out.width = VIEW_W;
+      out.height = VIEW_H;
+      const octx = out.getContext('2d');
+      octx.filter = `blur(${randInt(mulberry32(seed + 99), 6, 12)}px)`;
+      octx.drawImage(scratch, 0, 0);
+      octx.filter = 'none';
+      return out;
+    }
+
+    function generateCombinedInk(seed) {
+      const counts = buildLayerCounts(seed);
+      const bg = generateBackgroundInk(seed, counts);
+      const mid = generateMiddleInk(seed, counts);
+      const fg = generateForegroundInk(seed, counts);
+
+      const alpha = document.createElement('canvas');
+      alpha.width = VIEW_W;
+      alpha.height = VIEW_H;
+      const ctx = alpha.getContext('2d');
+      ctx.drawImage(bg, 0, 0);
+      ctx.drawImage(mid, 0, 0);
+      ctx.drawImage(fg, 0, 0);
+
+      return { bg, mid, fg, alpha, counts };
+    }
+
+    function layerCanvas(layers, mode) {
+      if (mode === 0) return layers.alpha;
+      if (mode === 1) return layers.bg;
+      if (mode === 2) return layers.mid;
+      return layers.fg;
+    }
+
+    function drawPreview(targetCtx, layers, mode) {
+      targetCtx.clearRect(0, 0, VIEW_W, VIEW_H);
+      if (whitePreview) {
+        targetCtx.fillStyle = '#ffffff';
+        targetCtx.fillRect(0, 0, VIEW_W, VIEW_H);
+      }
+      targetCtx.drawImage(layerCanvas(layers, mode), 0, 0);
+    }
+
+    function resizePreview() {
+      const dpr = Math.min(devicePixelRatio, 2);
+      const w = stageEl.clientWidth;
+      const h = stageEl.clientHeight;
+      preview.width = Math.round(w * dpr);
+      preview.height = Math.round(h * dpr);
+      preview.style.width = `${w}px`;
+      preview.style.height = `${h}px`;
+      const ctx = preview.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return ctx;
+    }
+
+    function updateInfo() {
+      const c = cachedLayers?.counts;
+      const stat = c ? `大${c.large} 中${c.medium} 小${c.small} 線${c.radial}` : '';
+      infoEl.textContent = `seed: ${currentSeed} | 1080×1920 | ${LAYER_NAMES[viewMode]} | ${stat} | ${whitePreview ? '白背景プレビュー' : '透過プレビュー'}`;
+    }
+
+    function render() {
+      cachedLayers = generateCombinedInk(currentSeed);
+      const ctx = resizePreview();
+      drawPreview(ctx, cachedLayers, viewMode);
+      updateInfo();
+    }
+
+    function downloadCanvas(canvas, name) {
+      canvas.toBlob((blob) => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = name;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }, 'image/png');
+    }
+
+    btnRegen.addEventListener('click', () => {
+      currentSeed = Math.floor(Math.random() * 999999);
+      render();
+    });
+
+    btnBg.addEventListener('click', () => {
+      whitePreview = !whitePreview;
+      btnBg.textContent = whitePreview ? '背景: 白（確認用）' : '背景: 透過';
+      btnBg.classList.toggle('active', whitePreview);
+      stageEl.style.background = whitePreview ? '#fff' : '#333';
+      if (cachedLayers) {
+        drawPreview(resizePreview(), cachedLayers, viewMode);
+        updateInfo();
+      }
+    });
+
+    btnLayer.addEventListener('click', () => {
+      viewMode = (viewMode + 1) % LAYER_NAMES.length;
+      btnLayer.textContent = `レイヤー: ${LAYER_NAMES[viewMode]}`;
+      if (cachedLayers) {
+        drawPreview(resizePreview(), cachedLayers, viewMode);
+        updateInfo();
+      }
+    });
+
+    btnDlAlpha.addEventListener('click', () => {
+      if (!cachedLayers) return;
+      const c = document.createElement('canvas');
+      c.width = VIEW_W;
+      c.height = VIEW_H;
+      c.getContext('2d').drawImage(layerCanvas(cachedLayers, viewMode === 0 ? 0 : viewMode), 0, 0);
+      downloadCanvas(c, `ink-alpha-${currentSeed}.png`);
+    });
+
+    btnDlWhite.addEventListener('click', () => {
+      if (!cachedLayers) return;
+      const c = document.createElement('canvas');
+      c.width = VIEW_W;
+      c.height = VIEW_H;
+      const wasWhite = whitePreview;
+      whitePreview = true;
+      drawPreview(c.getContext('2d'), cachedLayers, viewMode === 0 ? 0 : viewMode);
+      whitePreview = wasWhite;
+      downloadCanvas(c, `ink-white-${currentSeed}.png`);
+    });
+
+    window.addEventListener('resize', render);
+    render();
+  </script>
+</body>
+</html>

@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>墨汁インク × カウントダウン</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+    }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #stage {
+      position: relative;
+      width: min(100vw, calc(100vh * 1080 / 1920));
+      height: min(100vh, calc(100vw * 1920 / 1080));
+      aspect-ratio: 1080 / 1920;
+      overflow: hidden;
+      background: #000;
+    }
+    #canvas { display: block; width: 100%; height: 100%; }
+    #replay {
+      position: absolute;
+      bottom: max(20px, env(safe-area-inset-bottom));
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 12px 28px;
+      border: none;
+      border-radius: 999px;
+      background: linear-gradient(180deg, #e63946, #b91c1c);
+      color: #fff;
+      font-family: system-ui, sans-serif;
+      font-size: 15px;
+      cursor: pointer;
+      z-index: 10;
+    }
+    #replay:active { transform: translateX(-50%) scale(0.96); }
+  </style>
+</head>
+<body>
+  <div id="stage">
+    <canvas id="canvas"></canvas>
+    <button id="replay" type="button" hidden>もう一度</button>
+  </div>
+  <video id="fire-video" src="./re fire.mp4" loop muted playsinline crossorigin="anonymous" style="display:none"></video>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"
+    }
+  }
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.7/dist/gsap.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.7/dist/CustomEase.min.js"></script>
+  <script type="module">
+    import * as THREE from 'three';
+
+    CustomEase.create('heavy', 'M0,0 C0.16,1 0.3,1 1,1');
+    const HEAVY = 'heavy';
+
+    const VIEW_W = 1080;
+    const VIEW_H = 1920;
+    const VIEW_ASPECT = VIEW_W / VIEW_H;
+
+    const TOTAL = 8;
+    const STEP = TOTAL / 6;
+    const T = { appear: 0.55, hold: 0.528, exit: 0.255 };
+
+    const SEQUENCE = ['5', '4', '3', '2', '1', 'LAST'];
+    const INK_SEEDS = { 5: 101, 4: 202, 3: 303, 2: 404, 1: 505, LAST: 606 };
+
+    const canvas = document.getElementById('canvas');
+    const stageEl = document.getElementById('stage');
+    const replayBtn = document.getElementById('replay');
+    const fireVideo = document.getElementById('fire-video');
+
+    let renderer, scene, camera, fireBgPlane, fireBgTex, fireTex;
+    let fireVideoSize = { w: 1080, h: 1920 };
+    let masterTL;
+    const layers = {};
+
+    function stageSize() {
+      return {
+        w: stageEl.clientWidth || VIEW_W,
+        h: stageEl.clientHeight || VIEW_H,
+      };
+    }
+
+    function mulberry32(seed) {
+      let t = seed >>> 0;
+      return () => {
+        t += 0x6d2b79f5;
+        let r = Math.imul(t ^ (t >>> 15), t | 1);
+        r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
+        return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    function drawBlob(ctx, x, y, rx, ry, rot) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rot);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawTendril(ctx, x0, y0, angle, len, width, rng) {
+      const x1 = x0 + Math.cos(angle) * len;
+      const y1 = y0 + Math.sin(angle) * len;
+      const cx = x0 + Math.cos(angle) * len * (0.35 + rng() * 0.25)
+        + Math.cos(angle + Math.PI / 2) * (rng() - 0.5) * width * 2;
+      const cy = y0 + Math.sin(angle) * len * (0.35 + rng() * 0.25)
+        + Math.sin(angle + Math.PI / 2) * (rng() - 0.5) * width * 2;
+
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.quadraticCurveTo(cx, cy, x1, y1);
+      ctx.stroke();
+
+      const tipR = width * (0.45 + rng() * 0.55);
+      drawBlob(ctx, x1, y1, tipR * 1.2, tipR, angle);
+      if (rng() > 0.45) {
+        drawBlob(ctx, x1 + (rng() - 0.5) * tipR, y1 + (rng() - 0.5) * tipR, tipR * 0.7, tipR * 0.5, rng() * Math.PI);
+      }
+    }
+
+    function scatterDrops(ctx, w, h, rng, count, minR, maxR, cx, cy, radius) {
+      for (let i = 0; i < count; i++) {
+        const t = rng();
+        const ang = rng() * Math.PI * 2;
+        const dist = radius ? Math.sqrt(rng()) * radius : Math.sqrt(rng()) * Math.min(w, h) * 0.48;
+        const x = (cx ?? w * 0.5) + Math.cos(ang) * dist;
+        const y = (cy ?? h * 0.5) + Math.sin(ang) * dist;
+        if (x < -20 || x > w + 20 || y < -20 || y > h + 20) continue;
+        const r = minR + (maxR - minR) * Math.pow(t, 0.6);
+        drawBlob(ctx, x, y, r * (0.7 + rng() * 0.6), r * (0.5 + rng() * 0.5), rng() * Math.PI);
+      }
+    }
+
+    function drawSplatterHub(ctx, w, h, rng, cx, cy, intensity, sizeMul = 1) {
+      const s = intensity * (0.85 + rng() * 0.3) * sizeMul;
+
+      scatterDrops(ctx, w, h, rng, Math.floor(80 * s), 2, 14 * sizeMul, cx, cy, Math.min(w, h) * 0.55 * s);
+
+      const mainCount = 4 + Math.floor(rng() * 4);
+      for (let i = 0; i < mainCount; i++) {
+        const ox = (rng() - 0.5) * w * 0.28 * s;
+        const oy = (rng() - 0.5) * h * 0.22 * s;
+        const rx = w * (0.11 + rng() * 0.2) * s;
+        const ry = rx * (0.45 + rng() * 0.85);
+        drawBlob(ctx, cx + ox, cy + oy, rx, ry, rng() * Math.PI);
+      }
+
+      const tendrils = 5 + Math.floor(rng() * 5);
+      for (let i = 0; i < tendrils; i++) {
+        const angle = rng() * Math.PI * 2;
+        const len = w * (0.14 + rng() * 0.34) * s;
+        const width = (10 + rng() * 52 * s) * sizeMul;
+        drawTendril(ctx, cx, cy, angle, len, width, rng);
+      }
+
+      scatterDrops(ctx, w, h, rng, Math.floor(55 * s), 8 * sizeMul, 48 * sizeMul, cx, cy, Math.min(w, h) * 0.5 * s);
+      scatterDrops(ctx, w, h, rng, Math.floor(90 * s), 2, 16 * sizeMul, cx, cy, Math.min(w, h) * 0.62 * s);
+    }
+
+    function edgeBias(rng, w, h) {
+      const edge = rng();
+      if (edge < 0.25) return { x: w * (0.02 + rng() * 0.14), y: h * (0.1 + rng() * 0.8) };
+      if (edge < 0.5) return { x: w * (0.86 + rng() * 0.12), y: h * (0.1 + rng() * 0.8) };
+      if (edge < 0.75) return { x: w * (0.1 + rng() * 0.8), y: h * (0.02 + rng() * 0.12) };
+      return { x: w * (0.1 + rng() * 0.8), y: h * (0.86 + rng() * 0.12) };
+    }
+
+    function centerBias(rng, w, h) {
+      return {
+        x: w * (0.32 + rng() * 0.36),
+        y: h * (0.3 + rng() * 0.32),
+      };
+    }
+
+    function generateBackgroundInk(seed) {
+      const w = VIEW_W;
+      const h = VIEW_H;
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext('2d');
+      const rng = mulberry32(seed + 11);
+
+      ctx.fillStyle = '#000';
+      ctx.strokeStyle = '#000';
+      ctx.globalAlpha = 0.55;
+
+      scatterDrops(ctx, w, h, rng, 520, 1, 9);
+
+      const hubs = 10 + Math.floor(rng() * 6);
+      for (let i = 0; i < hubs; i++) {
+        const p = centerBias(rng, w, h);
+        drawSplatterHub(ctx, w, h, rng, p.x, p.y, 0.28 + rng() * 0.22, 0.42);
+      }
+
+      scatterDrops(ctx, w, h, rng, 280, 1, 6);
+      ctx.globalAlpha = 1;
+      return c;
+    }
+
+    function generateMiddleInk(seed) {
+      const w = VIEW_W;
+      const h = VIEW_H;
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext('2d');
+      const rng = mulberry32(seed + 29);
+
+      ctx.fillStyle = '#000';
+      ctx.strokeStyle = '#000';
+
+      scatterDrops(ctx, w, h, rng, 180, 2, 12);
+
+      const hubs = 4 + Math.floor(rng() * 3);
+      for (let i = 0; i < hubs; i++) {
+        const p = centerBias(rng, w, h);
+        drawSplatterHub(ctx, w, h, rng, p.x, p.y, 0.7 + rng() * 0.45);
+      }
+
+      const main = centerBias(rng, w, h);
+      drawSplatterHub(ctx, w, h, rng, main.x, main.y, 1.25 + rng() * 0.35);
+
+      scatterDrops(ctx, w, h, rng, 140, 2, 14);
+      return c;
+    }
+
+    function generateForegroundInk(seed) {
+      const w = VIEW_W;
+      const h = VIEW_H;
+      const scratch = document.createElement('canvas');
+      scratch.width = w;
+      scratch.height = h;
+      const ctx = scratch.getContext('2d');
+      const rng = mulberry32(seed + 47);
+
+      ctx.fillStyle = '#000';
+      ctx.strokeStyle = '#000';
+
+      const giants = 4 + Math.floor(rng() * 3);
+      for (let i = 0; i < giants; i++) {
+        const p = edgeBias(rng, w, h);
+        const rx = w * (0.16 + rng() * 0.2);
+        const ry = rx * (0.45 + rng() * 0.75);
+        drawBlob(ctx, p.x, p.y, rx, ry, rng() * Math.PI);
+        drawTendril(ctx, p.x, p.y, rng() * Math.PI * 2, w * (0.1 + rng() * 0.18), 16 + rng() * 38, rng);
+        scatterDrops(ctx, w, h, rng, 28, 8, 42, p.x, p.y, Math.min(w, h) * 0.22);
+      }
+
+      const edgeHubs = 3 + Math.floor(rng() * 2);
+      for (let i = 0; i < edgeHubs; i++) {
+        const p = edgeBias(rng, w, h);
+        drawSplatterHub(ctx, w, h, rng, p.x, p.y, 0.95 + rng() * 0.35, 1.35);
+      }
+
+      const out = document.createElement('canvas');
+      out.width = w;
+      out.height = h;
+      const octx = out.getContext('2d');
+      octx.filter = 'blur(9px)';
+      octx.drawImage(scratch, 0, 0);
+      octx.filter = 'none';
+      return out;
+    }
+
+    const INK_LAYERS = [
+      { key: 'bg', gen: generateBackgroundInk, z: -0.58, renderOrder: 0, opacityMul: 0.5 },
+      { key: 'mid', gen: generateMiddleInk, z: -0.4, renderOrder: 1, opacityMul: 1 },
+      { key: 'fg', gen: generateForegroundInk, z: -0.18, renderOrder: 2, opacityMul: 0.82 },
+    ];
+
+    function makeLabelTexture(label) {
+      const c = document.createElement('canvas');
+      c.width = 1024;
+      c.height = 512;
+      const ctx = c.getContext('2d');
+      ctx.clearRect(0, 0, c.width, c.height);
+      const size = label === 'LAST' ? 260 : 360;
+      ctx.font = `900 ${size}px "Arial Black", "Helvetica Neue", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = size * 0.14;
+      ctx.strokeStyle = '#000';
+      ctx.fillStyle = '#fff';
+      ctx.strokeText(label, c.width / 2, c.height / 2 + size * 0.04);
+      ctx.fillText(label, c.width / 2, c.height / 2 + size * 0.04);
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    function makeInkLayerMesh(seed, layerDef) {
+      const src = layerDef.gen(seed);
+      const tex = new THREE.CanvasTexture(src);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.generateMipmaps = true;
+
+      const mat = new THREE.MeshBasicMaterial({
+        map: tex,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
+      mesh.position.z = layerDef.z;
+      mesh.renderOrder = layerDef.renderOrder;
+      mesh.userData.opacityMul = layerDef.opacityMul;
+      return mesh;
+    }
+
+    function makeInkGroup(seed) {
+      return INK_LAYERS.map((def) => makeInkLayerMesh(seed, def));
+    }
+
+    function makeLabelMesh(label) {
+      const tex = makeLabelTexture(label);
+      const mat = new THREE.MeshBasicMaterial({
+        map: tex,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      });
+      const aspect = tex.image.width / tex.image.height;
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(3.6 * aspect, 3.6), mat);
+      mesh.renderOrder = 5;
+      return mesh;
+    }
+
+    function fitInkPlane(mesh) {
+      const fov = (camera.fov * Math.PI) / 180;
+      const dist = camera.position.z - mesh.position.z;
+      const vh = 2 * dist * Math.tan(fov / 2);
+      const vw = vh * camera.aspect;
+      const cover = Math.max(vw / VIEW_W, vh / VIEW_H) * 1.14;
+      mesh.userData.baseScale = { x: VIEW_W * cover, y: VIEW_H * cover };
+      const mul = mesh.userData.scaleMul ?? 1;
+      mesh.scale.set(mesh.userData.baseScale.x * mul, mesh.userData.baseScale.y * mul, 1);
+    }
+
+    function setInkScale(mesh, mul) {
+      mesh.userData.scaleMul = mul;
+      const b = mesh.userData.baseScale;
+      if (b) mesh.scale.set(b.x * mul, b.y * mul, 1);
+    }
+
+    async function setupFireVideo() {
+      fireVideo.muted = true;
+      fireVideo.playsInline = true;
+      fireVideo.loop = true;
+      await new Promise((resolve) => {
+        if (fireVideo.readyState >= 1 && fireVideo.videoWidth) {
+          resolve();
+          return;
+        }
+        const done = () => resolve();
+        fireVideo.addEventListener('loadedmetadata', done, { once: true });
+        fireVideo.addEventListener('loadeddata', done, { once: true });
+        fireVideo.load();
+        setTimeout(done, 1200);
+      });
+      fireVideoSize = {
+        w: fireVideo.videoWidth || 1080,
+        h: fireVideo.videoHeight || 1920,
+      };
+      try {
+        await fireVideo.play();
+      } catch {
+        setTimeout(() => fireVideo.play().catch(() => {}), 300);
+      }
+      fireTex = new THREE.VideoTexture(fireVideo);
+      fireTex.colorSpace = THREE.SRGBColorSpace;
+      fireTex.minFilter = THREE.LinearFilter;
+      fireTex.magFilter = THREE.LinearFilter;
+    }
+
+    function createFireBackground() {
+      fireBgTex = fireTex.clone();
+      fireBgPlane = new THREE.Mesh(
+        new THREE.PlaneGeometry(1, 1),
+        new THREE.MeshBasicMaterial({ map: fireBgTex, depthWrite: false }),
+      );
+      fireBgPlane.position.z = -14;
+      fireBgPlane.renderOrder = -20;
+      scene.add(fireBgPlane);
+      fitFireBackground();
+    }
+
+    function fitFireBackground() {
+      if (!fireBgPlane || !camera) return;
+      const fov = (camera.fov * Math.PI) / 180;
+      const dist = camera.position.z - fireBgPlane.position.z;
+      const vh = 2 * dist * Math.tan(fov / 2);
+      const vw = vh * camera.aspect;
+      const { w: iw, h: ih } = fireVideoSize;
+      const cover = Math.max(vw / iw, vh / ih);
+      fireBgPlane.scale.set(iw * cover, ih * cover, 1);
+    }
+
+    function resetLayer(key) {
+      const { inks, label } = layers[key];
+      inks.forEach((ink) => {
+        ink.visible = false;
+        ink.userData.scaleMul = 1;
+        setInkScale(ink, 1);
+        ink.material.opacity = 0;
+      });
+      label.visible = false;
+      label.scale.set(1, 1, 1);
+      label.material.opacity = 0;
+    }
+
+    function hideAll() {
+      SEQUENCE.forEach(resetLayer);
+    }
+
+    function addStepAnim(tl, key, at) {
+      const { inks, label } = layers[key];
+      const exitStart = at + T.appear + T.hold;
+      const inkProxy = { opacity: 0, scale: 0.94 };
+      const labelProxy = { opacity: 0, scale: 0.35 };
+
+      const applyInks = () => {
+        inks.forEach((ink) => {
+          ink.material.opacity = inkProxy.opacity * ink.userData.opacityMul;
+          setInkScale(ink, inkProxy.scale);
+        });
+      };
+      const applyLabel = () => {
+        label.material.opacity = labelProxy.opacity;
+        label.scale.set(labelProxy.scale, labelProxy.scale, 1);
+      };
+
+      tl.add(() => {
+        inks.forEach((ink) => { ink.visible = true; });
+        label.visible = true;
+        inkProxy.opacity = 0;
+        inkProxy.scale = 0.94;
+        labelProxy.opacity = 0;
+        labelProxy.scale = 0.35;
+        applyInks();
+        applyLabel();
+      }, at);
+
+      // 散らばった墨がフェードイン（上から落ちてくる演出ではない）
+      tl.to(inkProxy, {
+        opacity: 1,
+        scale: 1,
+        duration: T.appear * 0.85,
+        ease: HEAVY,
+        onUpdate: applyInks,
+      }, at);
+
+      tl.to(labelProxy, {
+        opacity: 1,
+        scale: 1,
+        duration: T.appear,
+        ease: HEAVY,
+        onUpdate: applyLabel,
+      }, at + 0.04);
+
+      tl.to(inkProxy, {
+        opacity: 0,
+        scale: 0.98,
+        duration: T.exit,
+        ease: HEAVY,
+        onUpdate: applyInks,
+      }, exitStart);
+
+      tl.to(labelProxy, {
+        opacity: 0,
+        scale: 0,
+        duration: T.exit,
+        ease: HEAVY,
+        onUpdate: applyLabel,
+      }, exitStart);
+
+      tl.add(() => resetLayer(key), at + STEP);
+    }
+
+    function play() {
+      masterTL?.kill();
+      hideAll();
+      if (fireVideo.paused) fireVideo.play().catch(() => {});
+      masterTL = gsap.timeline();
+      SEQUENCE.forEach((key, i) => addStepAnim(masterTL, key, i * STEP));
+    }
+
+    function onResize() {
+      const { w, h } = stageSize();
+      camera.aspect = VIEW_ASPECT;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h, false);
+      fitFireBackground();
+      Object.values(layers).forEach(({ inks }) => {
+        inks.forEach((ink) => fitInkPlane(ink));
+      });
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      if (fireTex) fireTex.needsUpdate = true;
+      if (fireBgTex) fireBgTex.needsUpdate = true;
+      renderer.render(scene, camera);
+    }
+
+    async function init() {
+      renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      const { w, h } = stageSize();
+      renderer.setSize(w, h, false);
+      renderer.setClearColor(0x000000);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+      scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera(52, VIEW_ASPECT, 0.1, 50);
+      camera.position.set(0, 0, 6.2);
+      camera.lookAt(0, 0, 0);
+
+      window.onresize = onResize;
+      animate();
+
+      await setupFireVideo();
+      createFireBackground();
+
+      SEQUENCE.forEach((key) => {
+        const inks = makeInkGroup(INK_SEEDS[key]);
+        inks.forEach((ink) => {
+          fitInkPlane(ink);
+          scene.add(ink);
+        });
+
+        const label = makeLabelMesh(key);
+        label.position.z = 0.05;
+        scene.add(label);
+
+        layers[key] = { inks, label };
+        resetLayer(key);
+      });
+
+      replayBtn.hidden = false;
+      replayBtn.onclick = play;
+      play();
+    }
+
+    init().catch(console.error);
+  </script>
+</body>
+</html>

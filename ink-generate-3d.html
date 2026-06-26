@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>3D墨汁エフェクト生成</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #d8d8d8;
+      font-family: system-ui, sans-serif;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 10px;
+    }
+    #stage {
+      position: relative;
+      width: min(100vw - 20px, calc((100vh - 110px) * 1080 / 1920));
+      height: min(100vh - 110px, calc((100vw - 20px) * 1920 / 1080));
+      aspect-ratio: 1080 / 1920;
+      overflow: hidden;
+      box-shadow: 0 4px 28px rgba(0,0,0,0.14);
+    }
+    #canvas { display: block; width: 100%; height: 100%; }
+    #toolbar {
+      display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
+    }
+    button {
+      padding: 10px 16px; border: none; border-radius: 999px;
+      background: #111; color: #fff; font-size: 13px; cursor: pointer;
+    }
+    button.secondary { background: #555; }
+    button.active { background: #b91c1c; }
+    button:active { transform: scale(0.97); }
+    #info { font-size: 12px; color: #666; text-align: center; }
+  </style>
+</head>
+<body>
+  <div id="stage"><canvas id="canvas"></canvas></div>
+  <div id="toolbar">
+    <button id="btn-regen" type="button">再生成</button>
+    <button id="btn-bg" class="secondary active" type="button">背景: 白（確認用）</button>
+    <button id="btn-layer" class="secondary" type="button">レイヤー: 合成</button>
+    <button id="btn-dl-alpha" type="button">透過PNG</button>
+    <button id="btn-dl-white" class="secondary" type="button">白背景PNG</button>
+  </div>
+  <p id="info">seed: —</p>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
+
+    const VIEW_W = 1080;
+    const VIEW_H = 1920;
+    const VIEW_ASPECT = VIEW_W / VIEW_H;
+
+    const LAYER_NAMES = ['合成', '手前', '中間', '奥'];
+    const LAYER_KEYS = ['all', 'foregroundInk', 'middleInk', 'backgroundInk'];
+
+    const LAYER_CFG = {
+      foregroundInk: {
+        zRange: [1.6, 3.8],
+        xySpread: 1.35,
+        blobCount: [5, 8],
+        blobRadius: [0.5, 1.05],
+        extrudeDepth: [0.16, 0.34],
+        dropletCount: [65, 95],
+        dropletR: [0.028, 0.1],
+        spikeCount: [7, 14],
+        opacityMul: 0.84,
+        scaleMul: 1.28,
+      },
+      middleInk: {
+        zRange: [-0.6, 1.4],
+        xySpread: 1.15,
+        blobCount: [6, 9],
+        blobRadius: [0.42, 0.88],
+        extrudeDepth: [0.14, 0.3],
+        dropletCount: [85, 125],
+        dropletR: [0.02, 0.07],
+        spikeCount: [10, 18],
+        opacityMul: 1,
+        scaleMul: 1,
+      },
+      backgroundInk: {
+        zRange: [-3.6, -1.0],
+        xySpread: 1.45,
+        blobCount: [8, 12],
+        blobRadius: [0.2, 0.48],
+        extrudeDepth: [0.07, 0.16],
+        dropletCount: [120, 180],
+        dropletR: [0.007, 0.038],
+        spikeCount: [5, 10],
+        opacityMul: 0.46,
+        scaleMul: 0.75,
+      },
+    };
+
+    const canvas = document.getElementById('canvas');
+    const stageEl = document.getElementById('stage');
+    const infoEl = document.getElementById('info');
+    const btnRegen = document.getElementById('btn-regen');
+    const btnBg = document.getElementById('btn-bg');
+    const btnLayer = document.getElementById('btn-layer');
+    const btnDlAlpha = document.getElementById('btn-dl-alpha');
+    const btnDlWhite = document.getElementById('btn-dl-white');
+
+    let renderer, scene, camera, composer, bokehPass;
+    let inkRoot;
+    let currentSeed = 303;
+    let whitePreview = true;
+    let viewMode = 0;
+
+    const inkMaterialPool = [];
+
+    function mulberry32(seed) {
+      let t = seed >>> 0;
+      return () => {
+        t += 0x6d2b79f5;
+        let r = Math.imul(t ^ (t >>> 15), t | 1);
+        r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
+        return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    function randRange(rng, [a, b]) {
+      return a + (b - a) * rng();
+    }
+
+    function randInt(rng, [a, b]) {
+      return a + Math.floor(rng() * (b - a + 1));
+    }
+
+    function makeInkMaterial(rng, opacityMul = 1) {
+      const mat = new THREE.MeshPhysicalMaterial({
+        color: 0x080808,
+        roughness: randRange(rng, [0.25, 0.45]),
+        metalness: 0,
+        clearcoat: randRange(rng, [0.45, 0.82]),
+        clearcoatRoughness: randRange(rng, [0.08, 0.22]),
+        transparent: opacityMul < 1,
+        opacity: opacityMul,
+        side: THREE.DoubleSide,
+      });
+      inkMaterialPool.push(mat);
+      return mat;
+    }
+
+    function makeBlobShape(rng, radius) {
+      const n = 10 + Math.floor(rng() * 8);
+      const pts = [];
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2;
+        const r = radius * (0.48 + rng() * 0.58);
+        pts.push(new THREE.Vector2(Math.cos(a) * r, Math.sin(a) * r));
+      }
+      const shape = new THREE.Shape();
+      shape.moveTo(pts[0].x, pts[0].y);
+      for (let i = 0; i < pts.length; i++) {
+        const c = pts[i];
+        const nxt = pts[(i + 1) % pts.length];
+        const mx = (c.x + nxt.x) * 0.5;
+        const my = (c.y + nxt.y) * 0.5;
+        shape.quadraticCurveTo(c.x, c.y, mx, my);
+      }
+      shape.closePath();
+      return shape;
+    }
+
+    function makeExtrudedBlob(rng, radius, depth, opacityMul) {
+      const geo = new THREE.ExtrudeGeometry(makeBlobShape(rng, radius), {
+        depth,
+        bevelEnabled: true,
+        bevelThickness: depth * 0.18,
+        bevelSize: depth * 0.14,
+        bevelSegments: 3,
+        curveSegments: 14,
+      });
+      geo.center();
+      const mesh = new THREE.Mesh(geo, makeInkMaterial(rng, opacityMul));
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      return mesh;
+    }
+
+    function makeDroplet(rng, r, opacityMul) {
+      const geo = new THREE.SphereGeometry(r, 12, 10);
+      const mesh = new THREE.Mesh(geo, makeInkMaterial(rng, opacityMul));
+      const squash = 0.75 + rng() * 0.45;
+      mesh.scale.set(1 + rng() * 0.35, squash, 0.85 + rng() * 0.4);
+      mesh.rotation.set(rng() * Math.PI, rng() * Math.PI, rng() * Math.PI);
+      return mesh;
+    }
+
+    function makeSpike(rng, length, baseR, opacityMul) {
+      const geo = new THREE.CapsuleGeometry(baseR, length, 4, 8);
+      const mesh = new THREE.Mesh(geo, makeInkMaterial(rng, opacityMul));
+      mesh.rotation.z = Math.PI / 2;
+      return mesh;
+    }
+
+    function placeXY(rng, spread, mode) {
+      if (mode === 'edge') {
+        const e = rng();
+        if (e < 0.25) return { x: -spread * (0.75 + rng() * 0.55), y: (rng() - 0.5) * spread * 1.6 };
+        if (e < 0.5) return { x: spread * (0.75 + rng() * 0.55), y: (rng() - 0.5) * spread * 1.6 };
+        if (e < 0.75) return { x: (rng() - 0.5) * spread * 1.6, y: spread * (0.7 + rng() * 0.55) };
+        return { x: (rng() - 0.5) * spread * 1.6, y: -spread * (0.7 + rng() * 0.55) };
+      }
+      if (mode === 'center') {
+        return { x: (rng() - 0.5) * spread * 1.1, y: (rng() - 0.5) * spread * 1.35 };
+      }
+      return { x: (rng() - 0.5) * spread * 1.7, y: (rng() - 0.5) * spread * 2.1 };
+    }
+
+    function buildLayer(layerKey, seedOffset) {
+      const cfg = LAYER_CFG[layerKey];
+      const rng = mulberry32(currentSeed + seedOffset);
+      const group = new THREE.Group();
+      group.name = layerKey;
+      group.userData.layerKey = layerKey;
+
+      const placement = layerKey === 'foregroundInk' ? 'edge'
+        : layerKey === 'backgroundInk' ? 'any' : 'center';
+
+      for (let i = 0; i < randInt(rng, cfg.blobCount); i++) {
+        const p = placeXY(rng, cfg.xySpread, i === 0 ? 'center' : placement);
+        const radius = randRange(rng, cfg.blobRadius) * cfg.scaleMul;
+        const depth = randRange(rng, cfg.extrudeDepth) * cfg.scaleMul;
+        const blob = makeExtrudedBlob(rng, radius, depth, cfg.opacityMul);
+        blob.position.set(
+          p.x,
+          p.y,
+          randRange(rng, cfg.zRange),
+        );
+        blob.rotation.set(
+          (rng() - 0.5) * 0.6,
+          (rng() - 0.5) * 0.6,
+          (rng() - 0.5) * Math.PI,
+        );
+        group.add(blob);
+
+        const spikes = randInt(rng, cfg.spikeCount);
+        for (let s = 0; s < spikes; s++) {
+          const ang = rng() * Math.PI * 2;
+          const len = radius * (0.5 + rng() * 1.4);
+          const baseR = radius * (0.04 + rng() * 0.09);
+          const spike = makeSpike(rng, len, baseR, cfg.opacityMul);
+          spike.position.copy(blob.position);
+          spike.rotation.set(
+            (rng() - 0.5) * 0.5,
+            ang,
+            (rng() - 0.5) * 0.4,
+          );
+          group.add(spike);
+        }
+      }
+
+      for (let i = 0; i < randInt(rng, cfg.dropletCount); i++) {
+        const p = placeXY(rng, cfg.xySpread, placement);
+        const r = randRange(rng, cfg.dropletR) * cfg.scaleMul;
+        const drop = makeDroplet(rng, r, cfg.opacityMul);
+        drop.position.set(
+          p.x + (rng() - 0.5) * 0.15,
+          p.y + (rng() - 0.5) * 0.15,
+          randRange(rng, cfg.zRange),
+        );
+        group.add(drop);
+      }
+
+      return group;
+    }
+
+    function clearInkMaterials() {
+      inkMaterialPool.forEach((m) => m.dispose());
+      inkMaterialPool.length = 0;
+    }
+
+    function disposeGroup(group) {
+      group.traverse((o) => {
+        if (o.isMesh) {
+          o.geometry?.dispose();
+        }
+      });
+    }
+
+    function rebuildInk() {
+      clearInkMaterials();
+      if (inkRoot) {
+        disposeGroup(inkRoot);
+        scene.remove(inkRoot);
+      }
+
+      inkRoot = new THREE.Group();
+      inkRoot.add(buildLayer('backgroundInk', 11));
+      inkRoot.add(buildLayer('middleInk', 29));
+      inkRoot.add(buildLayer('foregroundInk', 47));
+      scene.add(inkRoot);
+      updateLayerVisibility();
+      infoEl.textContent = `seed: ${currentSeed} | 1080×1920 | ${LAYER_NAMES[viewMode]} | ${whitePreview ? '白背景プレビュー' : '透過プレビュー'}`;
+    }
+
+    function updateLayerVisibility() {
+      if (!inkRoot) return;
+      const key = LAYER_KEYS[viewMode];
+      inkRoot.children.forEach((g) => {
+        g.visible = key === 'all' || g.userData.layerKey === key;
+      });
+    }
+
+    function setBackground() {
+      scene.background = whitePreview ? new THREE.Color(0xffffff) : null;
+      btnBg.textContent = whitePreview ? '背景: 白（確認用）' : '背景: 透過';
+      btnBg.classList.toggle('active', whitePreview);
+    }
+
+    function stageSize() {
+      return {
+        w: stageEl.clientWidth || VIEW_W,
+        h: stageEl.clientHeight || VIEW_H,
+      };
+    }
+
+    function setupRenderer() {
+      renderer = new THREE.WebGLRenderer({
+        canvas,
+        antialias: true,
+        alpha: true,
+        preserveDrawingBuffer: true,
+        powerPreference: 'high-performance',
+      });
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.05;
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    }
+
+    function setupScene() {
+      scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera(42, VIEW_ASPECT, 0.1, 80);
+      camera.position.set(0, 0, 9.2);
+      camera.lookAt(0, 0, 0);
+
+      scene.add(new THREE.AmbientLight(0xffffff, 0.28));
+
+      const key = new THREE.DirectionalLight(0xfff4e8, 1.35);
+      key.position.set(2.5, 4.5, 7);
+      key.castShadow = true;
+      key.shadow.mapSize.set(1024, 1024);
+      scene.add(key);
+
+      const rim = new THREE.DirectionalLight(0xe8eeff, 0.55);
+      rim.position.set(-4, 1.5, 3);
+      scene.add(rim);
+
+      const spec = new THREE.PointLight(0xffffff, 1.1, 22);
+      spec.position.set(0.5, 2, 6);
+      scene.add(spec);
+
+      const under = new THREE.PointLight(0xffffff, 0.35, 18);
+      under.position.set(-1, -3, 4);
+      scene.add(under);
+
+      composer = new EffectComposer(renderer);
+      composer.addPass(new RenderPass(scene, camera));
+      bokehPass = new BokehPass(scene, camera, {
+        focus: 9.0,
+        aperture: 0.00018,
+        maxblur: 0.012,
+      });
+      composer.addPass(bokehPass);
+    }
+
+    function onResize() {
+      const { w, h } = stageSize();
+      renderer.setSize(w, h, false);
+      composer.setSize(w, h);
+      camera.aspect = VIEW_ASPECT;
+      camera.updateProjectionMatrix();
+    }
+
+    function render() {
+      composer.render();
+    }
+
+    function exportPNG(useWhiteBg) {
+      const prevWhite = whitePreview;
+      const prevW = renderer.domElement.width;
+      const prevH = renderer.domElement.height;
+
+      whitePreview = useWhiteBg;
+      setBackground();
+      renderer.setSize(VIEW_W, VIEW_H, false);
+      composer.setSize(VIEW_W, VIEW_H);
+      composer.render();
+
+      const url = renderer.domElement.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = useWhiteBg ? `ink3d-white-${currentSeed}.png` : `ink3d-alpha-${currentSeed}.png`;
+      a.click();
+
+      whitePreview = prevWhite;
+      setBackground();
+      onResize();
+      render();
+    }
+
+    function init() {
+      setupRenderer();
+      setupScene();
+      setBackground();
+      onResize();
+      rebuildInk();
+
+      btnRegen.addEventListener('click', () => {
+        currentSeed = Math.floor(Math.random() * 999999);
+        rebuildInk();
+        render();
+      });
+
+      btnBg.addEventListener('click', () => {
+        whitePreview = !whitePreview;
+        setBackground();
+        infoEl.textContent = `seed: ${currentSeed} | 1080×1920 | ${LAYER_NAMES[viewMode]} | ${whitePreview ? '白背景プレビュー' : '透過プレビュー'}`;
+        render();
+      });
+
+      btnLayer.addEventListener('click', () => {
+        viewMode = (viewMode + 1) % LAYER_NAMES.length;
+        btnLayer.textContent = `レイヤー: ${LAYER_NAMES[viewMode]}`;
+        updateLayerVisibility();
+        infoEl.textContent = `seed: ${currentSeed} | 1080×1920 | ${LAYER_NAMES[viewMode]} | ${whitePreview ? '白背景プレビュー' : '透過プレビュー'}`;
+        render();
+      });
+
+      btnDlAlpha.addEventListener('click', () => exportPNG(false));
+      btnDlWhite.addEventListener('click', () => exportPNG(true));
+
+      window.addEventListener('resize', () => { onResize(); render(); });
+
+      (function loop() {
+        requestAnimationFrame(loop);
+        render();
+      })();
+    }
+
+    init();
+  </script>
+</body>
+</html>

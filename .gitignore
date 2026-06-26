@@ -1,0 +1,21 @@
+# OS / editor
+.DS_Store
+*.swp
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 生成物・分析用一時ファイル
+tmp-r2-ref/
+
+# 巨大ソース素材（ローカル保持・git には含めない）
+*.mov
+
+# デスクトップ直下の参照動画コピーはプロジェクト内 reference-*.mp4 を使用
+/r2.mp4
+/r2_2.mp4

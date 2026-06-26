@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>r2 dual reference</title>
+  <style>
+    * { margin: 0; box-sizing: border-box; }
+    body { background: #111; color: #eee; font: 13px system-ui, sans-serif; padding: 12px; }
+    h1 { font-size: 16px; margin-bottom: 12px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; max-width: 900px; }
+    .cell { background: #1a1a1a; border-radius: 8px; padding: 8px; }
+    .cell h2 { font-size: 12px; color: #888; margin-bottom: 6px; }
+    video { width: 100%; background: #000; display: block; border-radius: 4px; }
+    #seek { width: 100%; margin-top: 8px; }
+    #t { margin-top: 6px; color: #aaa; }
+  </style>
+</head>
+<body>
+  <h1>リファレンス比較（同期シーク）</h1>
+  <div class="grid">
+    <div class="cell">
+      <h2>r2（60fps source）</h2>
+      <video id="v1" src="./reference-r2.mp4" playsinline muted></video>
+    </div>
+    <div class="cell">
+      <h2>r2_2（24fps）</h2>
+      <video id="v2" src="./reference-r2-24fps.mp4" playsinline muted></video>
+    </div>
+  </div>
+  <input id="seek" type="range" min="0" max="1917" value="0" />
+  <p id="t">0.00s</p>
+  <script>
+    const v1 = document.getElementById('v1');
+    const v2 = document.getElementById('v2');
+    const seek = document.getElementById('seek');
+    const t = document.getElementById('t');
+    const marks = [150, 250, 370, 500, 620, 1040, 1250];
+    function sync(sec) {
+      v1.currentTime = sec;
+      v2.currentTime = sec;
+      seek.value = Math.round(sec * 1000);
+      t.textContent = `${sec.toFixed(3)}s`;
+    }
+    seek.addEventListener('input', () => sync(seek.value / 1000));
+    Promise.all([v1, v2].map(v => new Promise(r => v.addEventListener('loadedmetadata', r, { once: true })))).then(() => {
+      seek.max = Math.round(v2.duration * 1000);
+      sync(0.5);
+    });
+    window.seekRef = sync;
+    window.KEYFRAMES = { gatherEnd: 0.37, formed: 0.50, hold: 0.62, preRise: 1.04, riseMid: 1.25 };
+  </script>
+</body>
+</html>

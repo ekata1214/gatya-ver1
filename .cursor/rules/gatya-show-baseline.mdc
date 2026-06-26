@@ -1,0 +1,250 @@
+---
+description: SSRオリパガチャ演出の確定ベースライン（統合版）。細部修正時もこの構成・タイミングを壊さない。
+globs: cards-six.html,ink-sumi.html,src/gatya-unified.mjs,src/countdown-three-overlay.mjs,src/se.mjs
+alwaysApply: true
+---
+
+# Gatya Show Baseline（確定版・2026-06-27d）
+
+## エントリ
+- **メイン**: `cards-six.html` → `src/gatya-unified.mjs`
+- `ink-sumi.html` は `cards-six.html` へリダイレクトのみ（**ページ遷移で演出をつながない**）
+
+## アーキテクチャ（壊さない）
+- **1ページ統合**: カード演出とカウントダウン演出を同一DOM・同一 `<video id="fire-bg">` で継続
+- 5.5秒で `location.href` しない → `startInkPhase()` でレイヤー切替のみ
+- 炎動画・炎SE・SSRカードは遷移なしで継続（リロード・頭出しリセット禁止）
+
+## レイヤー（下→上）
+1. `#fire-bg` (z:0) — 暗転までループ。暗転以降は非表示・pause
+2. `#ink-test` (z:1, multiply) — カウントダウン中のみ。LASTは1回再生→フリーズ→暗転まで維持
+3. `#cards-canvas` (z:5) — 六角筒フェーズのみ（透明WebGL）
+4. `#ssr-layer` / `#ssr-card-wrap` + `#ssr-card-canvas` (z:90) — 3秒降下後バウンス継続、暗転まで表示
+5. `#countdown-canvas` (z:100) — 墨汁フェーズ以降
+6. `#darken` (150) / `#whiteout` (250)
+7. `#replay` (1000)
+
+## タイムライン（cards-six開始=0）
+| 時間 | 内容 |
+|------|------|
+| 0 | 六角筒入場→立つ→ホールド→上昇→消失 |
+| 3s | SSRカード降下（`ssr card登場.mp3`）→着地バウンス |
+| 5.5s | **レイヤー切替**（炎+SSR継続、インク/カウントダウン準備） |
+| +2.5s | カウントダウン開始（`和太鼓でドン.mp3` × 5〜1） |
+| LAST | `LAST.mp3`、インク1回→0.8s後フリーズ、LAST文字は暗転まで表示固定 |
+| LAST+2s | 暗転3s（炎SEフェードアウト3s、炎動画pause） |
+| 暗転後 | `white ssr.mp4` + SSRカード同時フェードイン、`white ssr.mp3` フェードイン |
+| +3s | ホワイトアウト |
+
+## SE（`src/se.mjs`・素材mp3）
+- `re fire se.mp3` — ループ。**初回のみ0.1sフェードイン**（`gatya-fire-intro-done`）。暗転で3sフェードアウト
+- `六角筒上昇.mp3` — 筒上昇開始
+- `ssr card登場.mp3` — SSR降下開始
+- `和太鼓でドン.mp3` — 数字5〜1
+- `LAST.mp3` — LAST表示
+- `white ssr.mp3` — white ssrフェードイン同期
+
+## 修正時の注意
+- `countdown-three-overlay.mjs` の `fireVideo.load()` は呼ばない（炎が一瞬消える）
+- SSRカードは `xPercent:-50, yPercent:-50` で中央固定。fromCards時に降らせ直さない
+- 細部調整はタイミング・SE・イージング単位。統合アーキテクチャへの回帰（2HTML遷移）はしない
+
+## 六角筒演出（確定・壊さない）
+
+`src/gatya-unified.mjs` の六角筒はユーザー確認済み（2026-06-27c）。**集結位置・筒移動・コップ形状・カード垂直化・間隔推移・上昇軌道・3D構造を勝手に戻さない。**
+
+### 垂直化の統合進行 `upright.p`（ユーザー確認済み）
+カード垂直化・間隔縮小・筒位置移動は **`upright.p`（0→1）1本**で駆動。個別 tween に分割して `t3` で切り替えない（カクつき防止）。
+
+| 定数 | 値 |
+|------|-----|
+| `UPRIGHT_EASE` | `power2.inOut`（`FLOW_EASE` と同一） |
+| 期間 | `T.stand + T.hold + T.rise`（`t1`〜`t4`） |
+
+`applyUprightPhase(p)` が `cardUpright` / `hexGap` / `anim.x,y,z` を同期更新。
+
+### タイムライン定数 `T`
+| 定数 | 値 |
+|------|-----|
+| `slide` | 0.5s — 斜め集結＋コップ形成 |
+| `stand` | 0.5s — 立ち上がり |
+| `hold` | 0.3s — ホールド |
+| `rise` | 1.0s — 上昇（ゆっくり） |
+| `exit` | 2s — 消失 |
+
+### 3D構造（傾きとY回転を分離）
+```
+cylinder (位置 x/y/z)
+└ cylinderTilt (rotX, rotZ)
+  └ cylinderSpin (rotation.y = spin + rotYOff)
+    └ カード×6（個別 rotation.x ＝ コップ傾き）
+```
+単一グループのオイラー角に戻さない。
+
+### コップ形成 → 垂直筒（ユーザー確認済み・口が上で広い）
+六角完成時、各カードは**上の方（口）が広いコップ形**。立ち上がり〜上昇中にだんだん垂直になり、**上昇し切った時点**で完全に垂直。
+
+| 定数 | 値 | 意味 |
+|------|-----|------|
+| `CUP.cardTilt` | 24° | カード外傾き（**符号は負**＝口が上で広い） |
+| `CUP.mouthGapBoost` | 1.18 | 口側の配置半径ブースト |
+| `cardUpright.t` | 0→1 | 0=コップ、1=垂直。`upright.p` 経由・`UPRIGHT_EASE` |
+
+```javascript
+// applyCardHexGather 内（壊さない）
+const cupTilt = -(1 - spread) * cupBlend * CUP.cardTilt * Math.cos(ang);
+```
+**`cupTilt` の符号を正に戻さない**（上下が逆になる）。
+
+### カード間隔の推移（ユーザー確認済み）
+完成直後は広め、上昇し切るときにいちばん狭い。
+
+| 定数 | 値 |
+|------|-----|
+| `HEX_GAP_START` | 1.35 |
+| `HEX_GAP_FINAL` | 0.08 |
+| `hexGap.scale` | `t1`〜`t4` で START→FINAL（`T.stand + T.hold + T.rise`） |
+
+### 集結 `GATHER`
+| 定数 | 値 |
+|------|-----|
+| `radiusMul` | 5.0 |
+| `burstY` | 0.28 |
+| `tiltOut` | 12° |
+
+### 集結位置と筒の移動（ユーザー確認済み・2026-06-27b）
+**集結は左下、垂直化に合わせて以前の中心へ移動**する二段構成。集結先と垂直時の位置を同一に戻さない。
+
+| 定数 | 値 | 意味 |
+|------|-----|------|
+| `FORM.x` / `FORM.y` | -0.28 / -0.82 | スライド終了時の**集結位置**（左下） |
+| `FORM.poseX` | 0 | 垂直化後の**筒中心 x**（以前の位置） |
+| `FORM.driftY` | 0.18 | ホールド終了時の **y**（以前の位置） |
+
+- スライド中: `anim` → `(FORM.x, FORM.y)`
+- `t1`〜`t4`: `upright.p` に連動して `(FORM.poseX, FORM.driftY)` → `RISE.mid` へ移動（`UPRIGHT_EASE`）
+- `t3`〜: 回転・スケール・フェードは従来の rise tween
+
+### 形成姿勢 `FORM`（スライド終了時の筒全体傾き）
+| 定数 | 値 |
+|------|-----|
+| 集結 `x` / `y` | -0.28 / -0.82 |
+| `poseX` / `driftY` | 0 / 0.18 |
+| `rotX` / `rotZ` / `rotYOff` | 70° / -7° / 5° |
+| `scaleMul` | 1.04 |
+
+スライド中に `rotX/Z/rotYOff` を `FORM` へ段階傾け（`TILT_EASE`、`duration: T.slide`）。
+
+### 立ち姿勢 `ROT`（ホールド〜上昇〜消失の筒全体）
+| 定数 | 値 |
+|------|-----|
+| `poseX` | 18° |
+| `poseZ` | -17° |
+| `poseYOff` | 6° |
+| `poseScale` | 1.06 |
+| `poseDepth` | 1.35（参照値） |
+| カメラ | `(0, 0.15, 6.1)` lookAt `(0, -0.15, 0.25)` |
+
+### 上昇時の筒全体垂直化（ユーザー確認済み・2026-06-27d・壊さない）
+
+**`cupRiseMode === 'after'`（本番・デフォルト）** — 上昇開始と同時に筒全体がだんだん垂直になり、垂直のまま消える。
+
+| 定数 | 値 | 意味 |
+|------|-----|------|
+| `CYL_VERTICAL_DUR` | **0.3s** | 立ち姿勢→完全垂直の時間（ユーザー確認済み） |
+| 開始 | `t3`（上昇開始） | `ROT.poseX/Z/YOff` から |
+| 終了値 | `rotX/Z/YOff` = 0 | `cylinderTilt` 完全垂直 |
+| イージング | `FLOW_EASE`（`power2.inOut`） | |
+| 上昇中 Y回転 | **なし**（`riseSpinTurns = 0`） | 傾き変化が見えるようスピン抑制 |
+
+```javascript
+// buildCardsTimeline 内（after・壊さない）
+if (cupRiseMode === 'after') {
+  tl.to(anim, {
+    rotX: 0, rotZ: 0, rotYOff: 0,
+    duration: CYL_VERTICAL_DUR, // 0.3
+    ease: FLOW_EASE,
+  }, t3);
+}
+```
+
+- `applyUprightPhase` では **筒の rot を触らない**（GSAP tween のみ）
+- 見切れは必須ではない（垂直化優先）
+- `before` モードは比較用：`rotX→85°`・`RISE_ROTATIONS`・`SPIN_FAST_RISE` を維持
+
+### 上昇・消失軌道（筒全体の x/y/z を同期移動）
+| フェーズ | x | y | z |
+|---------|---|---|---|
+| ホールド終了時 | 0 | `driftY` | 0 |
+| `RISE.mid`（上昇完了） | 0.45 | 3.1 | 1.3 |
+| `RISE.exit`（消失完了） | 1.25 | 5.9 | 1.5 |
+
+- 上昇・消失の位置は `upright.p`（上昇区間）＋ exit tween で `RISE` へ
+- **ホールド中に z を動かさない**（手前移動は `upright.p` 上昇区間から）
+- 真上のみの `y` 移動に戻さない
+
+### スピン
+| 定数 | 値 |
+|------|-----|
+| `SPIN_START` | 0.55 |
+| `SPIN_FAST_RISE` | 10 |
+| `RISE_ROTATIONS` | 1.5（上昇中） |
+
+## カード装飾シェーダー（確定・壊さない）
+
+六角筒6枚・SSRカードとも `makeCardGlowMaterial()` で加工（ユーザー確認済み）。
+
+### 共通ルール（スリーブ禁止）
+- PNGアルファ境界に沿った**黄色縁グロー**（`#ffdd22`）のみ。矩形枠・外側ハロー・`::before`/`::after` オーバーレイ禁止
+- 透明ピクセルへのグロー描画禁止（`texColor.a < 0.04` で discard）
+- `LineSegments` 矩形外枠・広い `edgeHaloScale`・カード外側の二重グローに戻さない
+
+### 六角筒 `CARD_FX`
+| 定数 | 値 |
+|------|-----|
+| `metalStrength` | 0.0225 |
+| `surfaceGlow` | 0.0125 |
+| `edgeSampleScale` | 4.0 |
+| `edgeBlurScale` | 2.4 |
+| `edgeMix` / `edgeAdd` | 0.9 / 0.58 |
+
+### SSRカード `SSR_CARD_FX`（縁は共通・メタリックのみ強め）
+| 定数 | 値 |
+|------|-----|
+| `metalStrength` | 0.055 |
+| `surfaceGlow` | 0.032 |
+| 縁グロー | `CARD_FX` と同一シェーダー |
+
+## SSRカード演出（確定・壊さない）
+
+`src/gatya-unified.mjs` のSSRカードはユーザー確認済み。**降下軌道・着地姿勢・3D向き・描画方式を勝手に戻さない。**
+
+### 降下（3秒・六角筒消失の右上から）
+| 定数 | 値 |
+|------|-----|
+| `SSR_DROP.from.x` | 165 |
+| `SSR_DROP.from.y` | -920 |
+| `SSR_DROP.from.z` | 110 |
+| `SSR_DROP.from.scale` | 0.72 |
+| `SSR_DROP.from.rotationX/Y/Z` | -3° / -8° / 12° |
+
+- 真上（`x:0, y:-1050`）からの降下に戻さない
+- 降下中 `#ssr-layer` に `blur(2.5px)`（`BLUR_STRONG` と同値）
+- 着地完了後にブラー解除 → バウンス開始
+
+### 着地姿勢 `SSR_POSE`（表面を手前に見せる・ユーザー確認済み）
+| 定数 | 値 |
+|------|-----|
+| `x` / `y` | -6 / 14 |
+| `z` / `scale` | -28 / 0.94 |
+| `rotationX` | -5°（上をやや奥） |
+| `rotationY` | -10°（左手前・正面寄り） |
+| `rotationZ` | 6°（時計回りに傾く） |
+
+### DOM / 描画 / GSAP
+- `#ssr-card-wrap`: GSAP 3D 変形ターゲット、`perspective: 900px`（`#ssr-layer`）
+- `#ssr-card-canvas`: WebGL。`makeCardGlowMaterial(tex, SSR_CARD_FX)` で描画（`<img>` に戻さない）
+- `xPercent/yPercent: -50` で中央基準。`setSsrCardShaderOpacity()` でフェード
+- `setSsrCardCenter()` は `SSR_POSE` を適用。バウンスは `SSR_POSE.y - 16`
+- 2Dの `rotation` のみに戻さない（`rotationX/Y/Z` + `z` + `scale` を維持）
+- CSS `drop-shadow` / `::before` / `::after` の矩形オーバーレイ禁止（スリーブ化する）

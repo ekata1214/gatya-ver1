@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>ref calibrate</title>
+  <style>
+    * { margin: 0; box-sizing: border-box; }
+    body { background: #111; color: #eee; font: 13px/1.5 system-ui, sans-serif; padding: 12px; }
+    #wrap { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+    #stage { position: relative; width: 360px; aspect-ratio: 1080/1920; background: #000; overflow: hidden; }
+    #ref-overlay { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.45; pointer-events: none; z-index: 20; mix-blend-mode: normal; }
+    #fire-bg, #cards-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #fire-bg { object-fit: cover; z-index: 0; }
+    #cards-canvas { z-index: 5; }
+    pre { background: #1a1a1a; padding: 10px; border-radius: 8px; max-width: 520px; white-space: pre-wrap; }
+    button { margin: 4px 4px 4px 0; padding: 6px 10px; cursor: pointer; }
+    input[type=range] { width: 200px; vertical-align: middle; }
+    label { display: block; margin: 6px 0; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="stage">
+      <video id="fire-bg" autoplay muted loop playsinline><source src="./re fire2.mp4" type="video/mp4" /></video>
+      <canvas id="cards-canvas"></canvas>
+      <img id="ref-overlay" alt="" />
+    </div>
+    <div>
+      <p>リファレンス重ね合わせ（opacity 0.45）</p>
+      <label>t <input id="t" type="range" min="0" max="1917" value="500" /> <span id="tv">0.50s</span></label>
+      <div>
+        <button data-t="0.37">0.37 slide end</button>
+        <button data-t="0.50">0.50 formed</button>
+        <button data-t="0.62">0.62 hold</button>
+        <button data-t="1.04">1.04 pre-rise</button>
+      </div>
+      <pre id="out">loading…</pre>
+    </div>
+  </div>
+  <script type="importmap">
+  { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" } }
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.7/dist/gsap.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.7/dist/CustomEase.min.js"></script>
+  <script type="module">
+    const TARGETS = {
+      0.37: { cx: 0.50, cy: 0.44, w: 0.50, h: 0.24 },
+      0.50: { cx: 0.50, cy: 0.47, w: 0.54, h: 0.26 },
+      0.62: { cx: 0.50, cy: 0.46, w: 0.58, h: 0.28 },
+      1.04: { cx: 0.50, cy: 0.44, w: 0.64, h: 0.30 },
+    };
+    const V = '20260627-refmatch';
+    const { initGatyaShow } = await import(`./src/gatya-unified.mjs?v=${V}`);
+    const show = await initGatyaShow({
+      stageEl: document.getElementById('stage'),
+      cardsCanvas: document.getElementById('cards-canvas'),
+      countdownCanvas: document.createElement('canvas'),
+      fireVideo: document.getElementById('fire-bg'),
+      inkVideo: document.createElement('video'),
+      whiteSsrVideo: document.createElement('video'),
+      ssrCard: document.createElement('div'),
+      ssrCardCanvas: document.createElement('canvas'),
+      ssrLayer: document.createElement('div'),
+      darkenEl: document.createElement('div'),
+      whiteoutEl: document.createElement('div'),
+      replayBtn: document.createElement('button'),
+      resolveGatherMode: () => 'after',
+      skipCountdown: true,
+    });
+    const overlay = document.getElementById('ref-overlay');
+    const out = document.getElementById('out');
+    const tEl = document.getElementById('t');
+    const tv = document.getElementById('tv');
+
+    async function seek(t) {
+      const ms = Math.round(t * 1000);
+      overlay.src = `./tmp-r2-ref/frame_${String(ms).padStart(4, '0')}ms.jpg`;
+      if (!overlay.src.includes(String(ms))) overlay.src = `./reference-r2-24fps.mp4#t=${t}`;
+      const bb = show.seekCardsTime(t);
+      const tgt = TARGETS[t] || TARGETS[0.5];
+      const err = bb ? Object.keys(tgt).reduce((s, k) => s + Math.abs(bb[k] - tgt[k]), 0) : 99;
+      out.textContent = [
+        `t=${t.toFixed(3)}s`,
+        `meas ${JSON.stringify(bb, null, 0)}`,
+        `tgt  ${JSON.stringify(tgt, null, 0)}`,
+        `err  ${err.toFixed(4)}`,
+        '',
+        'constants:',
+        JSON.stringify(show.getRefConstants(), null, 2),
+      ].join('\n');
+    }
+
+    tEl.addEventListener('input', () => {
+      const t = tEl.value / 1000;
+      tv.textContent = `${t.toFixed(2)}s`;
+      seek(t);
+    });
+    document.querySelectorAll('button[data-t]').forEach((b) => {
+      b.addEventListener('click', () => {
+        const t = Number(b.dataset.t);
+        tEl.value = Math.round(t * 1000);
+        tv.textContent = `${t.toFixed(2)}s`;
+        seek(t);
+      });
+    });
+    seek(0.5);
+    window.__refCal = { show, seek, TARGETS };
+  </script>
+</body>
+</html>

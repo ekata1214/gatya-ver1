@@ -1,0 +1,33 @@
+---
+description: cards-six 演出修正時の手順（比較UI・キャッシュ・本番固定値）
+globs: cards-six.html,src/gatya-unified.mjs,src/compare-panels.mjs,src/countdown-three-overlay.mjs
+alwaysApply: false
+---
+
+# Gatya 演出ワークフロー
+
+## エントリ
+- **`cards-six.html`** → `src/gatya-unified.mjs`
+- **`http://localhost:8878/cards-six.html`**（`file://` 不可）
+- リファレンス: **`reference-r2-24fps.mp4`** / `reference-viewer.html`
+
+## 修正のたびに必ず
+1. `src/gatya-unified.mjs` — 本体
+2. `src/compare-panels.mjs` — 左右説明（topic / before / after / SVG）
+3. `cards-six.html` の **`ASSET_V`** を更新（キャッシュバスティング）
+4. before / after ボタンで比較できることを確認
+
+## 比較UI（継続運用）
+- 画面上部: **before / after** 切替
+- 左右パネル: 画像（SVG）+ 文章説明
+- 修正テーマが変わるたび `COMPARE_NOTE` を差し替え
+
+## 六角筒（r2 + r2_2 最終合わせ v3）
+- 設定: **`src/ref-match-config.mjs`**（id: ref-final-v3）
+- 両リファレンス共通 1.917s / 24fpsキーフレーム基準
+- 形成: yStart→FORM.y 下から組み上げ / 対角線 reachEase
+- before = 前回 ref-match-all（形成位置が高すぎた版）
+
+## SSR・以降
+- 筒とすれ違い: `t3 + SSR_CROSS_RISE_OFFSET`（0.1s）
+- `POST_SHOW_AFTER` タイミング（before/after 比較対象外）
