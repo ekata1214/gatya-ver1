@@ -13,6 +13,8 @@ __pycache__/
 
 # 生成物・分析用一時ファイル
 tmp-r2-ref/
+site/*
+!site/README.md
 
 # 巨大ソース素材（ローカル保持・git には含めない）
 *.mov

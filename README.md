@@ -4,6 +4,25 @@
 
 ---
 
+## GitHub Pages（本番公開）
+
+本番用の最小ファイルだけを **`site/`** に出力して公開する。手順の詳細は **[DEPLOY.md](DEPLOY.md)** を参照。
+
+```bash
+python3 scripts/build-site.py   # site/ を生成
+python3 serve.py --site         # 本番バンドルをローカル確認
+```
+
+| 手順 | 内容 |
+|------|------|
+| 1 | `main` に push |
+| 2 | GitHub **Settings → Pages → Source: GitHub Actions** |
+| 3 | `Deploy GitHub Pages` ワークフローが `site/` を自動デプロイ |
+
+公開 URL: `https://<user>.github.io/<repo>/`（`index.html` が演出本体）
+
+---
+
 ## クイックスタート
 
 ```bash
@@ -189,8 +208,12 @@ cylinder (位置 x/y/z)
 
 ```
 gatya/
-├── cards-six.html          # メインエントリ
-├── serve.py                # ローカルサーバー（URL エイリアス付き）
+├── cards-six.html          # メインエントリ（開発）
+├── site/                   # 本番公開用（build-site.py で生成 → GitHub Pages）
+├── scripts/
+│   ├── build-site.py       # site/ へ最小ファイルをコピー
+│   └── fit-ref-pose.py     # 投影フィット用スクリプト
+├── serve.py                # ローカルサーバー（--site で本番バンドル）
 ├── show.html               # cards-six へリダイレクト
 ├── reference-r2.mp4        # リファレンス（60fps）
 ├── reference-r2-24fps.mp4  # リファレンス（24fps）
@@ -203,8 +226,6 @@ gatya/
 │   ├── compare-panels.mjs  # before/after 説明
 │   ├── countdown-three-overlay.mjs
 │   └── se.mjs              # SE 管理
-├── scripts/
-│   └── fit-ref-pose.py     # 投影フィット用スクリプト
 └── .cursor/rules/          # 開発ルール（baseline / workflow）
 ```
 

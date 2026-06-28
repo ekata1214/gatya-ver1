@@ -51,6 +51,10 @@ const SHOW_DEV_UI = true;  // 開発（比較UI）
 
 ## 注意
 
-- 本番確認前は **`SHOW_DEV_UI = false`** に戻す
+- 本番確認: `python3 scripts/build-site.py && python3 serve.py --site`
 - JS 変更時は `cards-six.html` の **`ASSET_V`** を更新
 - 比較UIの文言・SVG は `src/compare-panels.mjs`（開発モード時のみロード）
+
+## GitHub Pages
+
+本番公開は **`site/`**（`python3 scripts/build-site.py` で生成）。`site/` には `SHOW_DEV_UI = false` の `index.html` のみ。開発用 HTML・比較 UI は含まれない。
