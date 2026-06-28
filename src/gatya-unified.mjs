@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { initCountdownOverlay } from './countdown-three-overlay.mjs';
+import { initInkOverlay } from './ink-three-overlay.mjs';
 import { createSE, resetFireIntro } from './se.mjs';
 import { REF_MATCH, REF_TOTAL, BEFORE_MATCH } from './ref-match-config.mjs';
 
@@ -7,8 +8,8 @@ export async function initGatyaShow({
   stageEl,
   cardsCanvas,
   countdownCanvas,
+  inkCanvas,
   fireVideo,
-  inkVideo,
   whiteSsrVideo,
   ssrCard,
   ssrCardCanvas,
@@ -44,10 +45,9 @@ export async function initGatyaShow({
     if (p?.catch) p.catch(() => {});
   }
 
-  inkVideo.loop = false;
-
   let ssrBounceTween = null;
   let inkCountdownTimer = null;
+  let inkCtrl = null;
   let lastInkLocked = false;
   let lastInkFreezeTimer = null;
   let cardsMasterTL = null;
@@ -317,22 +317,21 @@ export async function initGatyaShow({
     });
   }
 
-  function syncInkToDigit({ force } = { force: false }) {
+  function syncInkToDigit(char, { force } = { force: false }) {
+    if (!inkCtrl || !char) return;
     if (lastInkLocked && !force) return;
-    inkVideo.style.opacity = '1';
-    try { inkVideo.currentTime = 0; } catch (_) {}
-    playVideo(inkVideo);
+    inkCtrl.playForDigit(char);
   }
 
   function freezeInk() {
     lastInkLocked = true;
     lastInkFreezeTimer?.kill?.();
-    inkVideo.pause();
+    inkCtrl?.freeze?.();
   }
 
   function hideInk() {
     freezeInk();
-    inkVideo.style.opacity = '0';
+    inkCtrl?.hide?.();
   }
 
   function showCardsLayer() {
@@ -838,7 +837,7 @@ export async function initGatyaShow({
 
   function startInkPhase() {
     showInkLayer();
-    inkVideo.style.opacity = '0';
+    inkCtrl?.reset?.();
     gsap.set([darkenEl, whiteoutEl], { opacity: 0 });
     gsap.set(whiteSsrVideo, { opacity: 0 });
     inkCountdownTimer = gsap.delayedCall(activePostShow.countdownDelay, () => {
@@ -849,8 +848,8 @@ export async function initGatyaShow({
   function resetInkPhase() {
     lastInkLocked = false;
     lastInkFreezeTimer?.kill?.();
-    gsap.killTweensOf([darkenEl, whiteoutEl, ssrCard, whiteSsrVideo, fireVideo, inkVideo, countdownCanvas]);
-    inkVideo.style.opacity = '0';
+    gsap.killTweensOf([darkenEl, whiteoutEl, ssrCard, whiteSsrVideo, fireVideo, countdownCanvas]);
+    inkCtrl?.reset?.();
     gsap.set([darkenEl, whiteoutEl], { opacity: 0 });
     gsap.set(whiteSsrVideo, { opacity: 0 });
     gsap.set(fireVideo, { opacity: 1 });
@@ -908,7 +907,6 @@ export async function initGatyaShow({
   }
 
   // --- init ---
-  inkVideo.style.opacity = '0';
   setSsrCardCenter();
   gsap.set(fireVideo, { opacity: 1 });
   gsap.set(ssrLayer, { opacity: 1, filter: 'blur(0px)' });
@@ -980,6 +978,10 @@ export async function initGatyaShow({
   setSsrCardShaderOpacity(0);
   animateSsrCard();
 
+  if (inkCanvas) {
+    inkCtrl = await initInkOverlay({ canvas: inkCanvas, stageEl });
+  }
+
   const countdownPromise = skipCountdown
     ? Promise.resolve({ reset() {}, start() {} })
     : initCountdownOverlay({
@@ -993,14 +995,17 @@ export async function initGatyaShow({
     },
     autoplay: false,
     onDigitStart: (char) => {
-      if (char === 'LAST') { se.play('last'); return; }
+      if (char === 'LAST') {
+        se.play('last');
+        return;
+      }
       if (lastInkLocked) return;
-      syncInkToDigit();
+      syncInkToDigit(char);
       se.play('taiko');
     },
     onLastShown: () => {
       lastInkLocked = true;
-      syncInkToDigit({ force: true });
+      syncInkToDigit('LAST', { force: true });
       lastInkFreezeTimer?.kill?.();
       lastInkFreezeTimer = gsap.delayedCall(activePostShow.lastInkFreeze, freezeInk);
       gsap.killTweensOf([darkenEl, ssrLayer, whiteoutEl, whiteSsrVideo, ssrCard]);

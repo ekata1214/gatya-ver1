@@ -115,17 +115,20 @@
       background: #000;
     }
     #fire-bg,
-    #ink-test {
+    #ink-canvas {
       position: absolute;
       inset: 0;
       width: 100%;
       height: 100%;
-      object-fit: cover;
-      object-position: center center;
       pointer-events: none;
     }
-    #fire-bg { z-index: 0; background: #000; }
-    #ink-test {
+    #fire-bg {
+      z-index: 0;
+      background: #000;
+      object-fit: cover;
+      object-position: center center;
+    }
+    #ink-canvas {
       z-index: 1;
       mix-blend-mode: multiply;
       opacity: 0;
@@ -272,9 +275,7 @@
       <video id="fire-bg" autoplay muted loop playsinline webkit-playsinline preload="auto" crossorigin="anonymous">
         <source src="./re fire2.mp4" type="video/mp4" />
       </video>
-      <video id="ink-test" muted playsinline webkit-playsinline preload="auto">
-        <source src="./ink test2.mp4" type="video/mp4" />
-      </video>
+      <canvas id="ink-canvas"></canvas>
       <canvas id="cards-canvas"></canvas>
       <canvas id="countdown-canvas"></canvas>
       <div id="darken" aria-hidden="true"></div>
@@ -311,7 +312,7 @@
     if (location.protocol === 'file:') {
       document.body.classList.add('is-file-protocol');
     } else {
-      const ASSET_V = '20260627-final-v3';
+      const ASSET_V = '20260628-ink3d';
       try {
       const { initGatyaShow } = await import(`./src/gatya-unified.mjs?v=${ASSET_V}`);
       const { mountComparePanels } = await import(`./src/compare-panels.mjs?v=${ASSET_V}`);
@@ -343,8 +344,8 @@
         stageEl: document.getElementById('stage'),
         cardsCanvas: document.getElementById('cards-canvas'),
         countdownCanvas: document.getElementById('countdown-canvas'),
+        inkCanvas: document.getElementById('ink-canvas'),
         fireVideo: document.getElementById('fire-bg'),
-        inkVideo: document.getElementById('ink-test'),
         whiteSsrVideo: document.getElementById('white-ssr'),
         ssrCard: document.getElementById('ssr-card-wrap'),
         ssrCardCanvas: document.getElementById('ssr-card-canvas'),
