@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { Font, FontLoader } from 'three/addons/loaders/FontLoader.js';
 import { TTFLoader } from 'three/addons/loaders/TTFLoader.js';
 import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
+import { createTransparentBloomComposer } from './card-bloom-composer.mjs';
+import { DIGIT_EDGE_GLOW, EDGE_POST_BLOOM, LAST_EDGE_GLOW } from './edge-glow-config.mjs';
 
 export function initCountdownOverlay(options) {
       CustomEase.create('heavy', 'M0,0 C0.16,1 0.3,1 1,1');
@@ -119,6 +121,7 @@ export function initCountdownOverlay(options) {
       const fireVideo = options.fireVideoEl;
 
       let renderer, scene, camera;
+      let digitBloom = null;
       let fireTex;
       let fireVideoSize = { w: 1080, h: 1920 };
       let numberTextureFrame = { height: 1.5, width: 0.84, zoom: 0.68 };
@@ -350,6 +353,56 @@ export function initCountdownOverlay(options) {
         };
       }
 
+      function expandGeometryAlongNormals(geo, amount) {
+        const pos = geo.attributes.position;
+        const norm = geo.attributes.normal;
+        for (let i = 0; i < pos.count; i += 1) {
+          pos.setXYZ(
+            i,
+            pos.getX(i) + norm.getX(i) * amount,
+            pos.getY(i) + norm.getY(i) * amount,
+            pos.getZ(i) + norm.getZ(i) * amount,
+          );
+        }
+        pos.needsUpdate = true;
+        geo.computeBoundingSphere();
+      }
+
+      function attachDigitEdgeGlow(mesh, sourceGeo, { expandScale = 1, haloOpacityScale = 1 } = {}) {
+        const lineExpand = DIGIT_EDGE_GLOW.line.expand * expandScale;
+        const haloExpand = DIGIT_EDGE_GLOW.halo.expand * expandScale;
+        const lineOpacity = DIGIT_EDGE_GLOW.line.opacity;
+        const haloOpacity = DIGIT_EDGE_GLOW.halo.opacity * haloOpacityScale;
+
+        const haloGeo = sourceGeo.clone();
+        expandGeometryAlongNormals(haloGeo, haloExpand);
+        const halo = new THREE.Mesh(haloGeo, new THREE.MeshBasicMaterial({
+          color: DIGIT_EDGE_GLOW.halo.color,
+          transparent: true,
+          opacity: haloOpacity,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }));
+        halo.renderOrder = -2;
+
+        const lineGeo = sourceGeo.clone();
+        expandGeometryAlongNormals(lineGeo, lineExpand);
+        const line = new THREE.Mesh(lineGeo, new THREE.MeshBasicMaterial({
+          color: DIGIT_EDGE_GLOW.line.color,
+          transparent: true,
+          opacity: lineOpacity,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }));
+        line.renderOrder = -1;
+
+        mesh.add(halo);
+        mesh.add(line);
+        mesh.userData.edgeHalo = halo;
+        mesh.userData.edgeLine = line;
+        mesh.userData.edgeGlowOpacity = { lineOpacity, haloOpacity };
+      }
+
       function createMaterials() {
         frontMatProto = new THREE.MeshStandardMaterial({
           map: fireTex,
@@ -405,7 +458,9 @@ export function initCountdownOverlay(options) {
         geo.center();
         remapDigitFrontUVs(geo, numberTextureFrame);
         splitBevelGroups(geo);
-        return new THREE.Mesh(geo, makeDigitMeshMaterials());
+        const mesh = new THREE.Mesh(geo, makeDigitMeshMaterials());
+        attachDigitEdgeGlow(mesh, geo);
+        return mesh;
       }
 
       async function init() {
@@ -422,6 +477,8 @@ export function initCountdownOverlay(options) {
         camera = new THREE.PerspectiveCamera(52, VIEW_ASPECT, 0.1, 50);
         camera.position.set(0, 0.15, 6.2);
         camera.lookAt(0, 0, 0);
+
+        digitBloom = createTransparentBloomComposer(renderer, scene, camera, stageSize(), EDGE_POST_BLOOM.digit);
 
         scene.add(new THREE.AmbientLight(0xffffff, 0.14));
 
@@ -482,6 +539,14 @@ export function initCountdownOverlay(options) {
       function setMeshOpacity(mesh, v) {
         const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
         mats.forEach((m) => { m.opacity = v; });
+        if (mesh.userData.edgeHalo) {
+          const haloBase = mesh.userData.edgeGlowOpacity?.haloOpacity ?? DIGIT_EDGE_GLOW.halo.opacity;
+          mesh.userData.edgeHalo.material.opacity = haloBase * v;
+        }
+        if (mesh.userData.edgeLine) {
+          const lineBase = mesh.userData.edgeGlowOpacity?.lineOpacity ?? DIGIT_EDGE_GLOW.line.opacity;
+          mesh.userData.edgeLine.material.opacity = lineBase * v;
+        }
       }
 
       function setGroupOpacity(group, v) {
@@ -533,6 +598,7 @@ export function initCountdownOverlay(options) {
           geo.center();
           splitBevelGroups(geo);
           const m = new THREE.Mesh(geo, makeMeshMaterials(w, h, FIRE_CHAR_TUNING[ch]));
+          attachDigitEdgeGlow(m, geo, LAST_EDGE_GLOW);
           const a = LAST_LETTER_ANIM[i];
           m.userData.anim = a;
           m.position.set(a.start.x, a.start.y, a.start.z);
@@ -653,6 +719,7 @@ export function initCountdownOverlay(options) {
         camera.aspect = VIEW_ASPECT;
         camera.updateProjectionMatrix();
         renderer.setSize(w, h, false);
+        digitBloom?.resize(w, h);
         if (fireBgPlane) fitFireBackground();
       }
 
@@ -660,7 +727,8 @@ export function initCountdownOverlay(options) {
         requestAnimationFrame(animate);
         if (fireTex) fireTex.needsUpdate = true;
         if (fireBgTex) fireBgTex.needsUpdate = true;
-        renderer.render(scene, camera);
+        if (digitBloom) digitBloom.render();
+        else renderer.render(scene, camera);
       }
 
   return init()

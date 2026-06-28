@@ -122,7 +122,7 @@
       background: #000;
     }
     #fire-bg,
-    #ink-canvas {
+    #ink-test {
       position: absolute;
       inset: 0;
       width: 100%;
@@ -135,10 +135,12 @@
       object-fit: cover;
       object-position: center center;
     }
-    #ink-canvas {
+    #ink-test {
       z-index: 1;
       mix-blend-mode: multiply;
       opacity: 0;
+      object-fit: cover;
+      object-position: center center;
     }
     #cards-canvas,
     #countdown-canvas {
@@ -172,10 +174,12 @@
     }
     #white-ssr {
       position: absolute;
-      inset: 0;
+      left: 50%;
+      top: 50%;
       z-index: 0;
-      width: 100%;
-      height: 100%;
+      width: 120%;
+      height: 120%;
+      transform: translate(-50%, -50%);
       object-fit: cover;
       pointer-events: none;
       opacity: 0;
@@ -213,6 +217,24 @@
       pointer-events: auto;
     }
     #replay:active { transform: translateX(-50%) scale(0.96); }
+    #skip {
+      position: absolute;
+      right: max(12px, env(safe-area-inset-right));
+      bottom: max(20px, env(safe-area-inset-bottom));
+      padding: 13px 18px;
+      border: 1px solid rgba(255,255,255,0.35);
+      border-radius: 999px;
+      background: rgba(0,0,0,0.55);
+      color: #fff;
+      font-family: system-ui, sans-serif;
+      font-size: 16px;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      z-index: 1001;
+      pointer-events: auto;
+      backdrop-filter: blur(6px);
+    }
+    #skip:active { transform: scale(0.96); }
     #compare-picker {
       position: absolute;
       top: max(16px, env(safe-area-inset-top));
@@ -281,7 +303,9 @@
       <video id="fire-bg" autoplay muted loop playsinline webkit-playsinline preload="auto" crossorigin="anonymous">
         <source src="./re fire2.mp4" type="video/mp4" />
       </video>
-      <canvas id="ink-canvas"></canvas>
+      <video id="ink-test" muted playsinline webkit-playsinline preload="auto">
+        <source src="./ink test2.mp4" type="video/mp4" />
+      </video>
       <canvas id="cards-canvas"></canvas>
       <canvas id="countdown-canvas"></canvas>
       <div id="darken" aria-hidden="true"></div>
@@ -295,6 +319,7 @@
       </div>
       <div id="whiteout" aria-hidden="true"></div>
       <button id="replay" type="button">ガチャを引く</button>
+      <button id="skip" type="button" hidden>SKIP</button>
       <div id="compare-picker" role="group" aria-label="before / after 比較">
         <button type="button" data-mode="before">before</button>
         <button type="button" data-mode="after" class="active">after</button>
@@ -322,7 +347,10 @@
       const SHOW_DEV_UI = false;
       document.body.classList.toggle('dev-ui', SHOW_DEV_UI);
 
-      const ASSET_V = '20260628-replay-ux';
+      const ASSET_V = '20260628-finale-rarity';
+      /** 本番は毎回25%抽選。?rarity= は開発UI時のみ固定 */
+      const urlRarity = new URLSearchParams(location.search).get('rarity');
+      const debugRarity = SHOW_DEV_UI ? urlRarity : null;
       try {
       const { initGatyaShow } = await import(`./src/gatya-unified.mjs?v=${ASSET_V}`);
 
@@ -358,7 +386,7 @@
         stageEl: document.getElementById('stage'),
         cardsCanvas: document.getElementById('cards-canvas'),
         countdownCanvas: document.getElementById('countdown-canvas'),
-        inkCanvas: document.getElementById('ink-canvas'),
+        inkVideo: document.getElementById('ink-test'),
         fireVideo: document.getElementById('fire-bg'),
         whiteSsrVideo: document.getElementById('white-ssr'),
         ssrCard: document.getElementById('ssr-card-wrap'),
@@ -367,8 +395,10 @@
         darkenEl: document.getElementById('darken'),
         whiteoutEl: document.getElementById('whiteout'),
         replayBtn: document.getElementById('replay'),
+        skipBtn: document.getElementById('skip'),
         resolveGatherMode: () => (SHOW_DEV_UI ? compareMode : 'after'),
         autoPlay: SHOW_DEV_UI,
+        forcedRarity: debugRarity,
       });
 
       if (SHOW_DEV_UI) {

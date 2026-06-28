@@ -1,15 +1,16 @@
 import * as THREE from 'three';
 import { initCountdownOverlay } from './countdown-three-overlay.mjs';
-import { initInkOverlay } from './ink-three-overlay.mjs';
 import { createSE, resetFireIntro } from './se.mjs';
 import { REF_MATCH, REF_TOTAL, BEFORE_MATCH } from './ref-match-config.mjs';
 import { createTransparentBloomComposer, createSelectiveBloomComposer, CARD_BLOOM_DEFAULTS, SSR_EDGE_BLOOM_DEFAULTS } from './card-bloom-composer.mjs';
+import { rollRarity, RARITY_CONFIG, RARITIES } from './rarity-config.mjs';
+import { EDGE_LINE, EDGE_HALO, EDGE_POST_BLOOM } from './edge-glow-config.mjs';
 
 export async function initGatyaShow({
   stageEl,
   cardsCanvas,
   countdownCanvas,
-  inkCanvas,
+  inkVideo,
   fireVideo,
   whiteSsrVideo,
   ssrCard,
@@ -18,10 +19,12 @@ export async function initGatyaShow({
   darkenEl,
   whiteoutEl,
   replayBtn,
+  skipBtn,
   resolveGatherMode,
   skipCountdown = false,
   autoPlay = true,
   replayLabels = { start: 'ガチャを引く', again: 'もう一度引く' },
+  forcedRarity = null,
 }) {
   CustomEase.create('heavy', 'M0,0 C0.16,1 0.3,1 1,1');
   CustomEase.create('heavyIO', 'M0,0 C0.45,0 0.2,1 1,1');
@@ -50,13 +53,20 @@ export async function initGatyaShow({
 
   let ssrBounceTween = null;
   let inkCountdownTimer = null;
-  let inkCtrl = null;
   let lastInkLocked = false;
   let lastInkFreezeTimer = null;
   let cardsMasterTL = null;
   let cardsAnimating = true;
   let countdownCtrl = null;
   let showHasCompleted = false;
+  let finaleTL = null;
+  let darkenDelayCall = null;
+  /** @type {import('./rarity-config.mjs').Rarity} */
+  let currentRarity = 'SSR';
+  /** 今回の引きでホワイトイン時に出すレア（暗転までは SSR 固定） */
+  let finaleRarity = 'SSR';
+  /** @type {Record<string, import('three').Texture>} */
+  const rarityTextures = {};
 
   function hideReplayBtn() {
     if (replayBtn) replayBtn.hidden = true;
@@ -68,6 +78,14 @@ export async function initGatyaShow({
     replayBtn.hidden = false;
   }
 
+  function hideSkipBtn() {
+    if (skipBtn) skipBtn.hidden = true;
+  }
+
+  function showSkipBtn() {
+    if (skipBtn) skipBtn.hidden = false;
+  }
+
   function onReplayClick() {
     hideReplayBtn();
     resetFireIntro();
@@ -76,6 +94,7 @@ export async function initGatyaShow({
 
   function onShowFinaleComplete() {
     showHasCompleted = true;
+    hideSkipBtn();
     showReplayBtn();
   }
 
@@ -86,15 +105,15 @@ export async function initGatyaShow({
   // SSR_FACE_FX — SSR face only (makeCardFaceMaterial): metalStrength, surfaceGlow
   // SSR_EDGE_FX — SSR edge shell (makeCardEdgeMaterial): glowRadius, haloStrength, bloomStrength, …
   // CARD_BLOOM — hex post-process | SSR_EDGE_BLOOM — edge-only bloom for SSR
-  const CARD_BLOOM = { ...CARD_BLOOM_DEFAULTS };
-  const SSR_EDGE_BLOOM = { ...SSR_EDGE_BLOOM_DEFAULTS };
+  const CARD_BLOOM = { ...CARD_BLOOM_DEFAULTS, ...EDGE_POST_BLOOM.card };
+  const SSR_EDGE_BLOOM = { ...SSR_EDGE_BLOOM_DEFAULTS, ...EDGE_POST_BLOOM.ssrEdge };
   const CARD_FX = {
     glowColor: new THREE.Color(0xffdd22),
-    glowRadius: 14,
-    glowFalloff: 1.8,
-    haloStrength: 1.2,
-    rimStrength: 0.25,
-    bloomStrength: 3.6,
+    glowRadius: EDGE_HALO.hex.glowRadius,
+    glowFalloff: EDGE_HALO.hex.glowFalloff,
+    haloStrength: EDGE_HALO.hex.haloStrength,
+    rimStrength: EDGE_LINE.rimStrength,
+    bloomStrength: EDGE_LINE.hexBloomStrength,
     bloomInteriorCap: 0.52,
     metalStrength: 0.0225,
     surfaceGlow: 0.0125,
@@ -105,11 +124,13 @@ export async function initGatyaShow({
   };
   const SSR_EDGE_FX = {
     glowColor: new THREE.Color(0xffdd22),
-    glowRadius: 20,
-    glowFalloff: 1.5,
-    haloStrength: 1.75,
-    bloomStrength: 4.4,
+    glowRadius: EDGE_HALO.ssr.glowRadius,
+    glowFalloff: EDGE_HALO.ssr.glowFalloff,
+    haloStrength: EDGE_HALO.ssr.haloStrength,
+    bloomStrength: EDGE_LINE.ssrBloomStrength,
   };
+  /** Edge rim / bloom line color (halo uses glowColor separately) */
+  const EDGE_LINE_COLOR = new THREE.Color(0xffffff);
   /** Extra frustum margin per side so fringe + bloom aren't clipped at canvas edges */
   const SSR_CANVAS_GLOW_PAD = 0.18;
   const DEG = Math.PI / 180;
@@ -364,20 +385,36 @@ export async function initGatyaShow({
   }
 
   function syncInkToDigit(char, { force } = { force: false }) {
-    if (!inkCtrl || !char) return;
+    if (!inkVideo || !char) return;
     if (lastInkLocked && !force) return;
-    inkCtrl.playForDigit(char);
+    inkVideo.loop = false;
+    gsap.set(inkVideo, { opacity: 1 });
+    try { inkVideo.currentTime = 0; } catch (_) {}
+    playVideo(inkVideo);
+  }
+
+  function resetInkVideo() {
+    if (!inkVideo) return;
+    gsap.set(inkVideo, { opacity: 0 });
+    inkVideo.loop = false;
+    try {
+      inkVideo.pause();
+      inkVideo.currentTime = 0;
+    } catch (_) {}
   }
 
   function freezeInk() {
     lastInkLocked = true;
     lastInkFreezeTimer?.kill?.();
-    inkCtrl?.freeze?.();
+    if (!inkVideo) return;
+    try { inkVideo.pause(); } catch (_) {}
   }
 
   function hideInk() {
     freezeInk();
-    inkCtrl?.hide?.();
+    if (!inkVideo) return;
+    gsap.set(inkVideo, { opacity: 0 });
+    try { inkVideo.pause(); } catch (_) {}
   }
 
   function showCardsLayer() {
@@ -475,6 +512,7 @@ export async function initGatyaShow({
         opacity: { value: 0 },
         texelSize: { value: new THREE.Vector2(1 / w, 1 / h) },
         glowColor: { value: fx.glowColor },
+        rimColor: { value: fx.rimColor ?? EDGE_LINE_COLOR },
         glowRadius: { value: fx.glowRadius },
         glowFalloff: { value: fx.glowFalloff },
         haloStrength: { value: fx.haloStrength },
@@ -496,6 +534,7 @@ export async function initGatyaShow({
         uniform float opacity;
         uniform vec2 texelSize;
         uniform vec3 glowColor;
+        uniform vec3 rimColor;
         uniform float glowRadius;
         uniform float glowFalloff;
         uniform float haloStrength;
@@ -584,12 +623,12 @@ export async function initGatyaShow({
             displayCol += vec3(1.0, 0.95, 0.72) * sheen;
             displayCol += vec3(1.0, 0.9, 0.55) * surfaceGlow * luma;
             displayCol = min(displayCol, vec3(bloomInteriorCap));
-            displayCol += glowColor * edgeTight * rimStrength;
+            displayCol += rimColor * edgeTight * rimStrength;
           } else {
             displayCol = glowColor * halo * haloStrength;
           }
 
-          vec3 bloomEmit = glowColor * edgeTight * bloomStrength;
+          vec3 bloomEmit = rimColor * edgeTight * bloomStrength;
           float outAlpha = onCard ? a : halo;
           gl_FragColor = vec4(displayCol + bloomEmit, outAlpha * opacity);
         }
@@ -602,12 +641,16 @@ export async function initGatyaShow({
 
   function makeCardFaceMaterial(tex, overrides = {}) {
     const fx = { ...SSR_FACE_FX, ...overrides };
+    const sheenColor = fx.sheenColor ?? [1.0, 0.95, 0.72];
+    const surfaceTint = fx.surfaceTint ?? [1.0, 0.9, 0.55];
     return new THREE.ShaderMaterial({
       uniforms: {
         map: { value: tex },
         opacity: { value: 0 },
         metalStrength: { value: fx.metalStrength },
         surfaceGlow: { value: fx.surfaceGlow },
+        sheenColor: { value: new THREE.Vector3(...sheenColor) },
+        surfaceTint: { value: new THREE.Vector3(...surfaceTint) },
       },
       vertexShader: `
         varying vec2 vUv;
@@ -621,6 +664,8 @@ export async function initGatyaShow({
         uniform float opacity;
         uniform float metalStrength;
         uniform float surfaceGlow;
+        uniform vec3 sheenColor;
+        uniform vec3 surfaceTint;
         varying vec2 vUv;
 
         void main() {
@@ -632,8 +677,8 @@ export async function initGatyaShow({
           float luma = dot(texColor.rgb, vec3(0.299, 0.587, 0.114));
 
           vec3 displayCol = texColor.rgb;
-          displayCol += vec3(1.0, 0.95, 0.72) * sheen;
-          displayCol += vec3(1.0, 0.9, 0.55) * surfaceGlow * luma;
+          displayCol += sheenColor * sheen;
+          displayCol += surfaceTint * surfaceGlow * luma;
 
           gl_FragColor = vec4(displayCol, texColor.a * opacity);
         }
@@ -654,6 +699,7 @@ export async function initGatyaShow({
         opacity: { value: 0 },
         texelSize: { value: new THREE.Vector2(1 / w, 1 / h) },
         glowColor: { value: fx.glowColor },
+        rimColor: { value: fx.rimColor ?? EDGE_LINE_COLOR },
         glowRadius: { value: fx.glowRadius },
         glowFalloff: { value: fx.glowFalloff },
         haloStrength: { value: fx.haloStrength },
@@ -671,6 +717,7 @@ export async function initGatyaShow({
         uniform float opacity;
         uniform vec2 texelSize;
         uniform vec3 glowColor;
+        uniform vec3 rimColor;
         uniform float glowRadius;
         uniform float glowFalloff;
         uniform float haloStrength;
@@ -754,7 +801,7 @@ export async function initGatyaShow({
             ? vec3(0.0)
             : glowColor * halo * haloStrength;
 
-          vec3 bloomEmit = glowColor * edgeTight * bloomStrength;
+          vec3 bloomEmit = rimColor * edgeTight * bloomStrength;
           float outAlpha = onCard ? edgeTight : halo * fringeAlpha;
           gl_FragColor = vec4(displayCol + bloomEmit, outAlpha * opacity);
         }
@@ -788,6 +835,36 @@ export async function initGatyaShow({
   function setSsrCardShaderOpacity(opacity) {
     if (ssrFaceMesh) ssrFaceMesh.material.uniforms.opacity.value = opacity;
     if (ssrEdgeMesh) ssrEdgeMesh.material.uniforms.opacity.value = opacity;
+  }
+
+  function applyFinaleRarityVisual() {
+    applyRarityConfig(finaleRarity);
+  }
+
+  function applySsrShowCard() {
+    applyRarityConfig('SSR');
+  }
+
+  function applyRarityConfig(rarity) {
+    const cfg = RARITY_CONFIG[rarity];
+    if (!cfg) return;
+    currentRarity = rarity;
+
+    const tex = rarityTextures[cfg.cardSrc];
+    if (tex && ssrFaceMesh && ssrEdgeMesh) {
+      const w = tex.image?.width || 512;
+      const h = tex.image?.height || 768;
+      ssrFaceMesh.material.uniforms.map.value = tex;
+      ssrEdgeMesh.material.uniforms.map.value = tex;
+      ssrEdgeMesh.material.uniforms.texelSize.value.set(1 / w, 1 / h);
+      ssrFaceMesh.material.uniforms.sheenColor.value.set(...cfg.sheenColor);
+      ssrFaceMesh.material.uniforms.surfaceTint.value.set(...cfg.surfaceTint);
+      ssrEdgeMesh.material.uniforms.glowColor.value.set(cfg.glowColor);
+    }
+
+    if (whiteSsrVideo) {
+      gsap.set(whiteSsrVideo, { filter: cfg.radialFilter });
+    }
   }
 
   function updateSsrCamera() {
@@ -1133,7 +1210,7 @@ export async function initGatyaShow({
 
   function startInkPhase() {
     showInkLayer();
-    inkCtrl?.reset?.();
+    resetInkVideo();
     gsap.set([darkenEl, whiteoutEl], { opacity: 0 });
     gsap.set(whiteSsrVideo, { opacity: 0 });
     inkCountdownTimer = gsap.delayedCall(activePostShow.countdownDelay, () => {
@@ -1144,8 +1221,10 @@ export async function initGatyaShow({
   function resetInkPhase() {
     lastInkLocked = false;
     lastInkFreezeTimer?.kill?.();
-    gsap.killTweensOf([darkenEl, whiteoutEl, ssrCard, whiteSsrVideo, fireVideo, countdownCanvas]);
-    inkCtrl?.reset?.();
+    darkenDelayCall?.kill();
+    finaleTL?.kill();
+    gsap.killTweensOf([darkenEl, whiteoutEl, ssrCard, whiteSsrVideo, fireVideo, countdownCanvas, inkVideo]);
+    resetInkVideo();
     gsap.set([darkenEl, whiteoutEl], { opacity: 0 });
     gsap.set(whiteSsrVideo, { opacity: 0 });
     gsap.set(fireVideo, { opacity: 1 });
@@ -1153,8 +1232,90 @@ export async function initGatyaShow({
     countdownCtrl?.reset?.();
   }
 
+  function runWhiteFinale({ skipDarken = false } = {}) {
+    finaleTL?.kill();
+    gsap.killTweensOf([darkenEl, whiteoutEl, whiteSsrVideo, ssrCard]);
+
+    const beginWhiteIn = () => {
+      applyFinaleRarityVisual();
+      gsap.set(countdownCanvas, { opacity: 0 });
+      hideInk();
+      gsap.set(fireVideo, { opacity: 0 });
+      try { fireVideo.pause(); } catch (_) {}
+      playVideo(whiteSsrVideo);
+      se.startWhiteSsr({ fadeIn: activePostShow.whiteRevealDur });
+      ssrBounceTween?.kill();
+      setSsrCardCenter();
+      gsap.set(ssrCard, { opacity: 1 });
+      setSsrCardShaderOpacity(0);
+    };
+
+    const revealDur = activePostShow.whiteRevealDur;
+    finaleTL = gsap.timeline();
+
+    if (skipDarken) {
+      beginWhiteIn();
+      se.fadeOutFire({ fade: 0.05 });
+      gsap.set(darkenEl, { opacity: 0 });
+      finaleTL.to(whiteSsrVideo, { opacity: 1, duration: revealDur, ease: POST }, 0);
+      finaleTL.to({ ssrO: 0 }, {
+        ssrO: 1,
+        duration: revealDur,
+        ease: POST,
+        onUpdate() {
+          setSsrCardShaderOpacity(this.targets()[0].ssrO);
+        },
+      }, 0);
+      finaleTL.add(() => startSsrBounce(), 0);
+    } else {
+      finaleTL.add(() => se.fadeOutFire({ fade: activePostShow.fireFadeOut }), 0);
+      finaleTL.to(darkenEl, { opacity: 1, duration: activePostShow.darkenDur, ease: POST }, 0);
+      finaleTL.add(beginWhiteIn, '>');
+      finaleTL.to(darkenEl, { opacity: 0, duration: revealDur, ease: POST }, '<');
+      finaleTL.to(whiteSsrVideo, { opacity: 1, duration: revealDur, ease: POST }, '<');
+      finaleTL.to({ ssrO: 0 }, {
+        ssrO: 1,
+        duration: revealDur,
+        ease: POST,
+        onUpdate() {
+          setSsrCardShaderOpacity(this.targets()[0].ssrO);
+        },
+      }, '<');
+      finaleTL.add(() => startSsrBounce(), '<');
+    }
+
+    finaleTL.to({}, { duration: activePostShow.finaleHold, ease: 'none' }, '>');
+    finaleTL.to(whiteoutEl, { opacity: 1, duration: activePostShow.whiteoutDur, ease: POST }, '>');
+    finaleTL.add(() => onShowFinaleComplete());
+  }
+
+  function skipToWhiteFinale() {
+    hideSkipBtn();
+    lastInkLocked = true;
+    lastInkFreezeTimer?.kill();
+    darkenDelayCall?.kill();
+    cardsMasterTL?.kill();
+    inkCountdownTimer?.kill();
+    ssrBounceTween?.kill();
+    gsap.killTweensOf([darkenEl, whiteoutEl, whiteSsrVideo, ssrCard, ssrLayer, cardsCanvas, fireVideo, countdownCanvas]);
+    countdownCtrl?.reset?.();
+    cardsAnimating = false;
+    gsap.set(cardsCanvas, { opacity: 0 });
+    gsap.set(countdownCanvas, { opacity: 0 });
+    gsap.set(ssrLayer, { opacity: 1, filter: 'blur(0px)' });
+    gsap.set([darkenEl, whiteoutEl], { opacity: 0 });
+    gsap.set(whiteSsrVideo, { opacity: 0 });
+    setSsrCardCenter();
+    gsap.set(ssrCard, { opacity: 1 });
+    setSsrCardShaderOpacity(0);
+    runWhiteFinale({ skipDarken: true });
+  }
+
   function playShow(mode) {
     hideReplayBtn();
+    showSkipBtn();
+    finaleRarity = rollRarity(forcedRarity);
+    applySsrShowCard();
     if (mode) setGatherMode(mode);
     else setGatherMode(resolveGather());
     cupRiseMode = 'after';
@@ -1272,13 +1433,21 @@ export async function initGatyaShow({
     return card;
   });
 
-  const ssrTexture = await loadTexture('./ssr card.png');
-  initSsrCardRenderer(ssrTexture);
+  const raritySrcs = [...new Set(RARITIES.map((r) => RARITY_CONFIG[r].cardSrc))];
+  await Promise.all(raritySrcs.map(async (src) => {
+    rarityTextures[src] = await loadTexture(src);
+  }));
+  initSsrCardRenderer(rarityTextures[RARITY_CONFIG.SSR.cardSrc]);
+  applySsrShowCard();
   setSsrCardShaderOpacity(0);
   animateSsrCard();
 
-  if (inkCanvas) {
-    inkCtrl = await initInkOverlay({ canvas: inkCanvas, stageEl });
+  if (inkVideo) {
+    inkVideo.muted = true;
+    inkVideo.playsInline = true;
+    inkVideo.loop = false;
+    inkVideo.preload = 'auto';
+    gsap.set(inkVideo, { opacity: 0 });
   }
 
   const countdownPromise = skipCountdown
@@ -1305,41 +1474,13 @@ export async function initGatyaShow({
       lastInkFreezeTimer?.kill?.();
       lastInkFreezeTimer = gsap.delayedCall(activePostShow.lastInkFreeze, freezeInk);
       gsap.killTweensOf([darkenEl, ssrLayer, whiteoutEl, whiteSsrVideo, ssrCard]);
-      gsap.delayedCall(activePostShow.lastToDarken, () => {
+      darkenDelayCall?.kill();
+      darkenDelayCall = gsap.delayedCall(activePostShow.lastToDarken, () => {
         gsap.killTweensOf([darkenEl, ssrLayer, whiteoutEl, whiteSsrVideo, ssrCard]);
         gsap.set([darkenEl, whiteoutEl], { opacity: 0 });
         gsap.set(ssrLayer, { opacity: 1, filter: 'blur(0px)' });
         gsap.set(whiteSsrVideo, { opacity: 0 });
-
-        const tl = gsap.timeline();
-        tl.add(() => se.fadeOutFire({ fade: activePostShow.fireFadeOut }), 0);
-        tl.to(darkenEl, { opacity: 1, duration: activePostShow.darkenDur, ease: POST }, 0);
-        tl.add(() => {
-          gsap.set(countdownCanvas, { opacity: 0 });
-          hideInk();
-          gsap.set(fireVideo, { opacity: 0 });
-          try { fireVideo.pause(); } catch (_) {}
-          playVideo(whiteSsrVideo);
-          se.startWhiteSsr({ fadeIn: activePostShow.whiteRevealDur });
-          ssrBounceTween?.kill();
-          setSsrCardCenter();
-          gsap.set(ssrCard, { opacity: 1 });
-          setSsrCardShaderOpacity(0);
-        }, '>');
-        tl.to(darkenEl, { opacity: 0, duration: activePostShow.whiteRevealDur, ease: POST }, '<');
-        tl.to(whiteSsrVideo, { opacity: 1, duration: activePostShow.whiteRevealDur, ease: POST }, '<');
-        tl.to({ ssrO: 0 }, {
-          ssrO: 1,
-          duration: activePostShow.whiteRevealDur,
-          ease: POST,
-          onUpdate() {
-            setSsrCardShaderOpacity(this.targets()[0].ssrO);
-          },
-        }, '<');
-        tl.add(() => startSsrBounce(), '<');
-        tl.to({}, { duration: activePostShow.finaleHold, ease: 'none' }, '>');
-        tl.to(whiteoutEl, { opacity: 1, duration: activePostShow.whiteoutDur, ease: POST }, '>');
-        tl.add(() => onShowFinaleComplete());
+        runWhiteFinale({ skipDarken: false });
       });
     },
     onComplete: () => {},
@@ -1348,11 +1489,16 @@ export async function initGatyaShow({
   countdownCtrl = await countdownPromise;
 
   if (replayBtn) replayBtn.onclick = onReplayClick;
+  if (skipBtn) {
+    skipBtn.hidden = true;
+    skipBtn.onclick = skipToWhiteFinale;
+  }
 
   resetCardsShow();
 
   if (!autoPlay) {
     showReplayBtn();
+    hideSkipBtn();
   }
 
   const _measurePt = new THREE.Vector3();
@@ -1408,6 +1554,11 @@ export async function initGatyaShow({
 
   return {
     playShow,
+    getCurrentRarity: () => finaleRarity,
+    getAppliedRarity: () => currentRarity,
+    rollRarity: () => rollRarity(forcedRarity),
+    applyRarity: applyRarityConfig,
+    applyFinaleRarity: applyFinaleRarityVisual,
     setCupRiseMode,
     getCupRiseMode,
     getPostShow,

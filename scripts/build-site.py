@@ -17,10 +17,13 @@ SRC_MODULES = [
     'se.mjs',
     'ref-match-config.mjs',
     'card-bloom-composer.mjs',
+    'rarity-config.mjs',
+    'edge-glow-config.mjs',
 ]
 
 MEDIA_ROOT = [
     're fire2.mp4',
+    'ink test2.mp4',
     'white ssr.mp4',
     're fire se.mp3',
     '六角筒上昇.mp3',
