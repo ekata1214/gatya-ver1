@@ -6,7 +6,7 @@
 
 ## How to read this doc
 
-For each **phase**, we list the **stage layer stack** bottom → top (what you would see if you peeled the cake).
+For each **phase**, we list the **stage layer stack** from **front** (closest to the viewer) down to **back** (farthest away).
 
 Legend:
 
@@ -45,7 +45,7 @@ Inside `#ssr-layer`:
 ## Phase A — Fire intro (0 – 0.15s)
 
 ```
-TOP ─────────────────────────────
+front ────────────────────────────
       [replay] [before/after]     UI (always)
       #whiteout                   ○
       #darken                     ○
@@ -54,7 +54,7 @@ TOP ─────────────────────────�
       #cards-canvas               ○ (opacity 1 but hex opacity 0 in 3D)
       #ink-test                   ○
       #fire-bg                    ● looping
-BOTTOM ───────────────────────────
+back ─────────────────────────────
 ```
 
 **Single-frame content:** fire video fills stage. Hex scene may render transparent empty scene.
@@ -64,14 +64,14 @@ BOTTOM ────────────────────────�
 ## Phase B — Hex active (0.15 – ~1.92s)
 
 ```
-TOP ─────────────────────────────
+front ────────────────────────────
       #whiteout / #darken         ○
       #countdown-canvas           ○
       #ssr-layer                  ○ until phase C
       #cards-canvas               ● WebGL hex + optional CSS blur
       #ink-test                   ○
       #fire-bg                    ●
-BOTTOM ───────────────────────────
+back ─────────────────────────────
 ```
 
 **Single-frame content:** fire + six cards in 3D. Cards drawn with shader glow; transparent areas show fire.
@@ -83,7 +83,7 @@ BOTTOM ────────────────────────�
 ## Phase C — SSR overlaps hex (~1.14 – ~1.76s)
 
 ```
-TOP ─────────────────────────────
+front ────────────────────────────
       #countdown-canvas           ○
       #ssr-layer                  ●
         └ #ssr-card-wrap          ● GSAP 3D transform
@@ -92,7 +92,7 @@ TOP ─────────────────────────�
       #cards-canvas               ● hex still visible (rise/exit)
       #ink-test                   ○
       #fire-bg                    ●
-BOTTOM ───────────────────────────
+back ─────────────────────────────
 ```
 
 **Single-frame content:** fire + rising/fading hex + SSR dropping/bouncing **in front of hex** (z 90 > 5).
@@ -104,14 +104,14 @@ BOTTOM ────────────────────────�
 After `showInkLayer()`:
 
 ```
-TOP ─────────────────────────────
+front ────────────────────────────
       #darken                     ○
       #countdown-canvas           ● 3D digits / LAST
       #ssr-layer                  ● bounce continues
       #cards-canvas               ○ hidden (opacity 0)
       #ink-test                   ● on each digit (multiply)
       #fire-bg                    ●
-BOTTOM ───────────────────────────
+back ─────────────────────────────
 ```
 
 **Single-frame content:** fire darkened locally by ink × multiply, 3D countdown on top, SSR bouncing mid-screen.
@@ -133,7 +133,7 @@ Same stack as D, but:
 ## Phase E2 — Darken in (~1s after LAST)
 
 ```
-TOP ─────────────────────────────
+front ────────────────────────────
       #whiteout                   ○
       #darken                     ● opacity → 1
       #countdown-canvas           ● then hidden mid-phase
@@ -141,7 +141,7 @@ TOP ─────────────────────────�
       #cards-canvas               ○
       #ink-test                   ○ hidden
       #fire-bg                    ● fading out / pause
-BOTTOM ───────────────────────────
+back ─────────────────────────────
 ```
 
 **Single-frame content:** black wash covers everything; fire and countdown turned off during transition.
@@ -151,14 +151,14 @@ BOTTOM ────────────────────────�
 ## Phase E3 — White SSR reveal
 
 ```
-TOP ─────────────────────────────
+front ────────────────────────────
       #darken                     ● opacity → 0 (revealing below)
       #ssr-layer                  ●
         └ #white-ssr              ● video opacity → 1
         └ #ssr-card-wrap          ● fade in
       #countdown-canvas           ○
       #fire-bg                    ○ hidden
-BOTTOM ───────────────────────────
+back ─────────────────────────────
 ```
 
 **Single-frame content:** bright white SSR video fills background; card on top with bounce.
@@ -168,10 +168,10 @@ BOTTOM ────────────────────────�
 ## Phase E4 — Whiteout
 
 ```
-TOP ─────────────────────────────
+front ────────────────────────────
       #whiteout                   ● opacity → 1
       (everything below washed out)
-BOTTOM ───────────────────────────
+back ─────────────────────────────
 ```
 
 ---
@@ -200,7 +200,7 @@ On wide screens, `aside.side-panel` sits **beside** `#stage-wrap`, not in the la
 
 ## Quick lookup: “what’s on screen at t?”
 
-| t (s) | Dominant layers (bottom → top) |
+| t (s) | Dominant layers (back → front) |
 |-------|--------------------------------|
 | 0.10 | fire |
 | 0.37 | fire, hex (formed) |

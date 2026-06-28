@@ -6,7 +6,7 @@
 
 ## 読み方
 
-各フェーズで **奥 → 手前**（下 → 上）に何があるかを書きます。ケーキを下から剥がすイメージです。
+各フェーズで **奥 → 手前**（上 → 下）に何があるかを書きます。上が奥（viewer から遠い）、下が手前（viewer に近い）です。
 
 凡例：
 
@@ -45,16 +45,16 @@ z-index は `cards-six.html` の `#stage` 子要素基準。
 ## フェーズ A — 炎のみ（0 – 0.15s）
 
 ```
-手前 ────────────────────────────
-      [リプレイ] [before/after]    UI
-      #whiteout                    ○
-      #darken                      ○
-      #countdown-canvas            ○
-      #ssr-layer                   ○（wrap 非表示）
-      #cards-canvas                ○（3D 上は opacity 0）
-      #ink-test                    ○
-      #fire-bg                     ● ループ
 奥 ───────────────────────────────
+      #fire-bg                     ● ループ
+      #ink-test                    ○
+      #cards-canvas                ○（3D 上は opacity 0）
+      #ssr-layer                   ○（wrap 非表示）
+      #countdown-canvas            ○
+      #darken                      ○
+      #whiteout                    ○
+手前 ───────────────────────────────
+      [リプレイ] [before/after]    UI
 ```
 
 **この1コマ:** 炎動画が全面。六角筒 canvas は透明な render のみの可能性あり。
@@ -64,14 +64,15 @@ z-index は `cards-six.html` の `#stage` 子要素基準。
 ## フェーズ B — 六角筒（0.15 – 〜1.92s）
 
 ```
-手前 ────────────────────────────
-      #whiteout / #darken          ○
-      #countdown-canvas            ○
-      #ssr-layer                   ○（C まで）
-      #cards-canvas                ● 六角筒 + CSS blur 可
-      #ink-test                    ○
-      #fire-bg                     ●
 奥 ───────────────────────────────
+      #fire-bg                     ●
+      #ink-test                    ○
+      #cards-canvas                ● 六角筒 + CSS blur 可
+      #ssr-layer                   ○（C まで）
+      #countdown-canvas            ○
+      #whiteout / #darken          ○
+手前 ───────────────────────────────
+      （このフェーズで手前側の追加レイヤーなし）
 ```
 
 **この1コマ:** 炎 + 6枚カード（WebGL）。透明部分から炎が見える。
@@ -83,16 +84,17 @@ z-index は `cards-six.html` の `#stage` 子要素基準。
 ## フェーズ C — SSR と六角筒のすれ違い（〜1.14 – 〜1.76s）
 
 ```
-手前 ────────────────────────────
-      #countdown-canvas            ○
+奥 ───────────────────────────────
+      #fire-bg                     ●
+      #ink-test                    ○
+      #cards-canvas                ● 上昇・消失中
       #ssr-layer                   ●
+        └ #white-ssr               ○
         └ #ssr-card-wrap           ● GSAP 3D
             └ #ssr-card-canvas     ● カード絵
-        └ #white-ssr               ○
-      #cards-canvas                ● 上昇・消失中
-      #ink-test                    ○
-      #fire-bg                     ●
-奥 ───────────────────────────────
+      #countdown-canvas            ○
+手前 ───────────────────────────────
+      （このフェーズで手前側の追加レイヤーなし）
 ```
 
 **この1コマ:** 炎 + 上がる筒 + **手前に** SSR（z 90 > 5）。
@@ -104,14 +106,15 @@ z-index は `cards-six.html` の `#stage` 子要素基準。
 `showInkLayer()` 後：
 
 ```
-手前 ────────────────────────────
-      #darken                      ○
-      #countdown-canvas            ● 3D 数字 / LAST
-      #ssr-layer                   ● バウンス継続
-      #cards-canvas                ○ 非表示
-      #ink-test                    ● 数字ごと（multiply）
-      #fire-bg                     ●
 奥 ───────────────────────────────
+      #fire-bg                     ●
+      #ink-test                    ● 数字ごと（multiply）
+      #cards-canvas                ○ 非表示
+      #ssr-layer                   ● バウンス継続
+      #countdown-canvas            ● 3D 数字 / LAST
+      #darken                      ○
+手前 ───────────────────────────────
+      （このフェーズで手前側の追加レイヤーなし）
 ```
 
 **この1コマ:** 炎に墨が乗る + 手前に 3D 数字 + SSR。
@@ -133,15 +136,16 @@ D と同じスタック。違い：
 ## フェーズ E2 — 暗転 IN（LAST 約 +1s）
 
 ```
-手前 ────────────────────────────
-      #whiteout                    ○
-      #darken                      ● opacity → 1
-      #countdown-canvas            ● → 途中で非表示
-      #ssr-layer                   ●
-      #cards-canvas                ○
-      #ink-test                    ○
-      #fire-bg                     ● → フェード / pause
 奥 ───────────────────────────────
+      #fire-bg                     ● → フェード / pause
+      #ink-test                    ○
+      #cards-canvas                ○
+      #ssr-layer                   ●
+      #countdown-canvas            ● → 途中で非表示
+      #darken                      ● opacity → 1
+      #whiteout                    ○
+手前 ───────────────────────────────
+      （このフェーズで手前側の追加レイヤーなし）
 ```
 
 **この1コマ:** 黒が被さる。炎・カウントダウンは遷移中に OFF。
@@ -151,14 +155,15 @@ D と同じスタック。違い：
 ## フェーズ E3 — 白 SSR 揭示
 
 ```
-手前 ────────────────────────────
-      #darken                      ● opacity → 0（下を見せる）
+奥 ───────────────────────────────
+      #fire-bg                     ○
+      #countdown-canvas            ○
       #ssr-layer                   ●
         └ #white-ssr               ● フェード IN
         └ #ssr-card-wrap           ●
-      #countdown-canvas            ○
-      #fire-bg                     ○
-奥 ───────────────────────────────
+      #darken                      ● opacity → 0（下を見せる）
+手前 ───────────────────────────────
+      （このフェーズで手前側の追加レイヤーなし）
 ```
 
 **この1コマ:** 白い SSR 動画が背景、カードが手前。
@@ -168,10 +173,10 @@ D と同じスタック。違い：
 ## フェーズ E4 — ホワイトアウト
 
 ```
-手前 ────────────────────────────
-      #whiteout                    ● opacity → 1
-      （下全部白潰し）
 奥 ───────────────────────────────
+      （下全部白潰し）
+手前 ───────────────────────────────
+      #whiteout                    ● opacity → 1
 ```
 
 ---
