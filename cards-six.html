@@ -181,13 +181,12 @@
       width: min(78%, 720px);
       pointer-events: none;
       opacity: 0;
+      overflow: visible;
       transform-style: preserve-3d;
       transform-origin: 50% 50%;
     }
     #ssr-card-canvas {
       display: block;
-      width: 100%;
-      height: auto;
       pointer-events: none;
     }
     #replay {
@@ -312,7 +311,7 @@
     if (location.protocol === 'file:') {
       document.body.classList.add('is-file-protocol');
     } else {
-      const ASSET_V = '20260628-ink3d';
+      const ASSET_V = '20260628-ssr-glow-strong';
       try {
       const { initGatyaShow } = await import(`./src/gatya-unified.mjs?v=${ASSET_V}`);
       const { mountComparePanels } = await import(`./src/compare-panels.mjs?v=${ASSET_V}`);

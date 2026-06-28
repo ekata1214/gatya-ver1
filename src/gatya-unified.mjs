@@ -3,6 +3,7 @@ import { initCountdownOverlay } from './countdown-three-overlay.mjs';
 import { initInkOverlay } from './ink-three-overlay.mjs';
 import { createSE, resetFireIntro } from './se.mjs';
 import { REF_MATCH, REF_TOTAL, BEFORE_MATCH } from './ref-match-config.mjs';
+import { createTransparentBloomComposer, createSelectiveBloomComposer, CARD_BLOOM_DEFAULTS, SSR_EDGE_BLOOM_DEFAULTS } from './card-bloom-composer.mjs';
 
 export async function initGatyaShow({
   stageEl,
@@ -56,19 +57,37 @@ export async function initGatyaShow({
 
   const CARD_W = REF_MATCH.CARD_W;
   const CARD_H = CARD_W * 1.5;
+  // --- Card glow calibration (src/gatya-unified.mjs) ---
+  // CARD_FX — hex shader (makeCardGlowMaterial)
+  // SSR_FACE_FX — SSR face only (makeCardFaceMaterial): metalStrength, surfaceGlow
+  // SSR_EDGE_FX — SSR edge shell (makeCardEdgeMaterial): glowRadius, haloStrength, bloomStrength, …
+  // CARD_BLOOM — hex post-process | SSR_EDGE_BLOOM — edge-only bloom for SSR
+  const CARD_BLOOM = { ...CARD_BLOOM_DEFAULTS };
+  const SSR_EDGE_BLOOM = { ...SSR_EDGE_BLOOM_DEFAULTS };
   const CARD_FX = {
-    borderColor: new THREE.Color(0xffdd22),
+    glowColor: new THREE.Color(0xffdd22),
+    glowRadius: 14,
+    glowFalloff: 1.8,
+    haloStrength: 1.2,
+    rimStrength: 0.25,
+    bloomStrength: 3.6,
+    bloomInteriorCap: 0.52,
     metalStrength: 0.0225,
     surfaceGlow: 0.0125,
-    edgeSampleScale: 4.0,
-    edgeBlurScale: 2.4,
-    edgeMix: 0.9,
-    edgeAdd: 0.58,
   };
-  const SSR_CARD_FX = {
+  const SSR_FACE_FX = {
     metalStrength: 0.055,
-    surfaceGlow: 0.032,
+    surfaceGlow: 0.028,
   };
+  const SSR_EDGE_FX = {
+    glowColor: new THREE.Color(0xffdd22),
+    glowRadius: 20,
+    glowFalloff: 1.5,
+    haloStrength: 1.75,
+    bloomStrength: 4.4,
+  };
+  /** Extra frustum margin per side so fringe + bloom aren't clipped at canvas edges */
+  const SSR_CANVAS_GLOW_PAD = 0.18;
   const DEG = Math.PI / 180;
   const VIEW_W = 1080;
   const VIEW_H = 1920;
@@ -264,7 +283,10 @@ export async function initGatyaShow({
   ];
 
   let renderer, scene, camera, cylinder, cylinderTilt, cylinderSpin, cards = [];
-  let ssrRenderer, ssrScene, ssrCamera, ssrMesh;
+  let hexBloom = null;
+  let ssrRenderer, ssrFaceScene, ssrBloomScene, ssrCamera, ssrFaceMesh, ssrEdgeMesh, ssrBloom = null;
+  let ssrPlaneW = 0;
+  let ssrPlaneH = 0;
   const anim = { x: 0, y: 0, z: 0, rotX: ROT.horizontal, rotZ: 0, rotYOff: 0, scaleMul: 1, opacity: 0 };
   const spin = { rate: 0, y: 0 };
   const SPIN_START = 0.55;
@@ -428,13 +450,15 @@ export async function initGatyaShow({
         map: { value: tex },
         opacity: { value: 0 },
         texelSize: { value: new THREE.Vector2(1 / w, 1 / h) },
-        borderColor: { value: fx.borderColor },
+        glowColor: { value: fx.glowColor },
+        glowRadius: { value: fx.glowRadius },
+        glowFalloff: { value: fx.glowFalloff },
+        haloStrength: { value: fx.haloStrength },
+        rimStrength: { value: fx.rimStrength },
+        bloomStrength: { value: fx.bloomStrength },
+        bloomInteriorCap: { value: fx.bloomInteriorCap },
         metalStrength: { value: fx.metalStrength },
         surfaceGlow: { value: fx.surfaceGlow },
-        edgeSampleScale: { value: fx.edgeSampleScale },
-        edgeBlurScale: { value: fx.edgeBlurScale },
-        edgeMix: { value: fx.edgeMix },
-        edgeAdd: { value: fx.edgeAdd },
       },
       vertexShader: `
         varying vec2 vUv;
@@ -447,65 +471,273 @@ export async function initGatyaShow({
         uniform sampler2D map;
         uniform float opacity;
         uniform vec2 texelSize;
-        uniform vec3 borderColor;
+        uniform vec3 glowColor;
+        uniform float glowRadius;
+        uniform float glowFalloff;
+        uniform float haloStrength;
+        uniform float rimStrength;
+        uniform float bloomStrength;
+        uniform float bloomInteriorCap;
         uniform float metalStrength;
         uniform float surfaceGlow;
-        uniform float edgeSampleScale;
-        uniform float edgeBlurScale;
-        uniform float edgeMix;
-        uniform float edgeAdd;
         varying vec2 vUv;
 
-        float sampleA(vec2 uv) {
+        float sampleAlpha(vec2 uv) {
           return texture2D(map, uv).a;
         }
 
-        float edgeRaw(vec2 uv) {
-          vec2 ts = texelSize * edgeSampleScale;
-          float aR = sampleA(uv + vec2(ts.x, 0.0));
-          float aL = sampleA(uv - vec2(ts.x, 0.0));
-          float aU = sampleA(uv + vec2(0.0, ts.y));
-          float aD = sampleA(uv - vec2(0.0, ts.y));
-          float edgeGrad = length(vec2(aR - aL, aU - aD));
-          return smoothstep(0.48, 1.35, edgeGrad);
+        float alphaBoundary(vec2 uv) {
+          float a = sampleAlpha(uv);
+          float grad = length(vec2(dFdx(a), dFdy(a)));
+          return smoothstep(0.0, 0.12, grad);
         }
 
-        float edgeFluff(vec2 uv) {
-          vec2 b = texelSize * edgeBlurScale;
-          float e = edgeRaw(uv);
-          e = max(e, edgeRaw(uv + vec2(b.x, 0.0)) * 0.8);
-          e = max(e, edgeRaw(uv - vec2(b.x, 0.0)) * 0.8);
-          e = max(e, edgeRaw(uv + vec2(0.0, b.y)) * 0.8);
-          e = max(e, edgeRaw(uv - vec2(0.0, b.y)) * 0.8);
-          e = max(e, edgeRaw(uv + vec2(b.x, b.y)) * 0.62);
-          e = max(e, edgeRaw(uv + vec2(-b.x, b.y)) * 0.62);
-          e = max(e, edgeRaw(uv + vec2(b.x, -b.y)) * 0.62);
-          e = max(e, edgeRaw(uv + vec2(-b.x, -b.y)) * 0.62);
-          return pow(min(e, 1.0), 1.45);
+        float outerHalo(vec2 uv) {
+          vec2 px = texelSize * glowRadius;
+          float accum = 0.0;
+          float norm = 0.0;
+
+          float w1 = 0.36;
+          accum += w1 * sampleAlpha(uv);
+          norm += w1;
+
+          float w2 = 0.22;
+          vec2 r1 = px * 0.35;
+          accum += w2 * (sampleAlpha(uv + vec2(r1.x, 0.0)) + sampleAlpha(uv - vec2(r1.x, 0.0))
+            + sampleAlpha(uv + vec2(0.0, r1.y)) + sampleAlpha(uv - vec2(0.0, r1.y)));
+          norm += w2 * 4.0;
+
+          float w3 = 0.16;
+          vec2 r2 = px * 0.7;
+          accum += w3 * (sampleAlpha(uv + vec2(r2.x, 0.0)) + sampleAlpha(uv - vec2(r2.x, 0.0))
+            + sampleAlpha(uv + vec2(0.0, r2.y)) + sampleAlpha(uv - vec2(0.0, r2.y))
+            + sampleAlpha(uv + r2) + sampleAlpha(uv + vec2(-r2.x, r2.y))
+            + sampleAlpha(uv + vec2(r2.x, -r2.y)) + sampleAlpha(uv - r2));
+          norm += w3 * 8.0;
+
+          float w4 = 0.12;
+          vec2 r3 = px;
+          accum += w4 * (sampleAlpha(uv + vec2(r3.x, 0.0)) + sampleAlpha(uv - vec2(r3.x, 0.0))
+            + sampleAlpha(uv + vec2(0.0, r3.y)) + sampleAlpha(uv - vec2(0.0, r3.y))
+            + sampleAlpha(uv + r3) + sampleAlpha(uv + vec2(-r3.x, r3.y))
+            + sampleAlpha(uv + vec2(r3.x, -r3.y)) + sampleAlpha(uv - r3));
+          norm += w4 * 8.0;
+
+          float w5 = 0.08;
+          vec2 r4 = px * 1.45;
+          accum += w5 * (sampleAlpha(uv + vec2(r4.x, 0.0)) + sampleAlpha(uv - vec2(r4.x, 0.0))
+            + sampleAlpha(uv + vec2(0.0, r4.y)) + sampleAlpha(uv - vec2(0.0, r4.y))
+            + sampleAlpha(uv + r4) + sampleAlpha(uv + vec2(-r4.x, r4.y))
+            + sampleAlpha(uv + vec2(r4.x, -r4.y)) + sampleAlpha(uv - r4));
+          norm += w5 * 8.0;
+
+          float w6 = 0.06;
+          vec2 r5 = px * 2.0;
+          accum += w6 * (sampleAlpha(uv + vec2(r5.x, 0.0)) + sampleAlpha(uv - vec2(r5.x, 0.0))
+            + sampleAlpha(uv + vec2(0.0, r5.y)) + sampleAlpha(uv - vec2(0.0, r5.y)));
+          norm += w6 * 4.0;
+
+          float halo = pow(clamp(accum / norm, 0.0, 1.0), glowFalloff);
+          float a0 = sampleAlpha(uv);
+          halo *= 1.0 - smoothstep(0.0, 0.08, a0);
+          return halo;
         }
+
+        void main() {
+          vec4 texColor = texture2D(map, vUv);
+          float a = texColor.a;
+          float edgeTight = alphaBoundary(vUv);
+          float halo = outerHalo(vUv);
+          bool onCard = a >= 0.04;
+
+          if (!onCard && halo < 0.02) discard;
+
+          vec3 displayCol = texColor.rgb;
+          if (onCard) {
+            float sheen = sin((vUv.x * 6.0 + vUv.y * 4.0) * 3.14159);
+            sheen = pow(abs(sheen), 10.0) * metalStrength;
+            float luma = dot(texColor.rgb, vec3(0.299, 0.587, 0.114));
+            displayCol += vec3(1.0, 0.95, 0.72) * sheen;
+            displayCol += vec3(1.0, 0.9, 0.55) * surfaceGlow * luma;
+            displayCol = min(displayCol, vec3(bloomInteriorCap));
+            displayCol += glowColor * edgeTight * rimStrength;
+          } else {
+            displayCol = glowColor * halo * haloStrength;
+          }
+
+          vec3 bloomEmit = glowColor * edgeTight * bloomStrength;
+          float outAlpha = onCard ? a : halo;
+          gl_FragColor = vec4(displayCol + bloomEmit, outAlpha * opacity);
+        }
+      `,
+      transparent: true,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+  }
+
+  function makeCardFaceMaterial(tex, overrides = {}) {
+    const fx = { ...SSR_FACE_FX, ...overrides };
+    return new THREE.ShaderMaterial({
+      uniforms: {
+        map: { value: tex },
+        opacity: { value: 0 },
+        metalStrength: { value: fx.metalStrength },
+        surfaceGlow: { value: fx.surfaceGlow },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D map;
+        uniform float opacity;
+        uniform float metalStrength;
+        uniform float surfaceGlow;
+        varying vec2 vUv;
 
         void main() {
           vec4 texColor = texture2D(map, vUv);
           if (texColor.a < 0.04) discard;
 
-          float edge = edgeFluff(vUv);
-
           float sheen = sin((vUv.x * 6.0 + vUv.y * 4.0) * 3.14159);
           sheen = pow(abs(sheen), 10.0) * metalStrength;
           float luma = dot(texColor.rgb, vec3(0.299, 0.587, 0.114));
 
-          vec3 col = texColor.rgb;
-          col += vec3(1.0, 0.95, 0.72) * sheen;
-          col += vec3(1.0, 0.9, 0.55) * surfaceGlow * luma;
-          col = mix(col, borderColor, edge * edgeMix);
-          col += borderColor * edge * edgeAdd;
+          vec3 displayCol = texColor.rgb;
+          displayCol += vec3(1.0, 0.95, 0.72) * sheen;
+          displayCol += vec3(1.0, 0.9, 0.55) * surfaceGlow * luma;
 
-          gl_FragColor = vec4(col, texColor.a * opacity);
+          gl_FragColor = vec4(displayCol, texColor.a * opacity);
         }
       `,
       transparent: true,
       side: THREE.DoubleSide,
-      depthWrite: true,
+      depthWrite: false,
+    });
+  }
+
+  function makeCardEdgeMaterial(tex, overrides = {}) {
+    const fx = { ...SSR_EDGE_FX, ...overrides };
+    const w = tex.image?.width || 512;
+    const h = tex.image?.height || 768;
+    return new THREE.ShaderMaterial({
+      uniforms: {
+        map: { value: tex },
+        opacity: { value: 0 },
+        texelSize: { value: new THREE.Vector2(1 / w, 1 / h) },
+        glowColor: { value: fx.glowColor },
+        glowRadius: { value: fx.glowRadius },
+        glowFalloff: { value: fx.glowFalloff },
+        haloStrength: { value: fx.haloStrength },
+        bloomStrength: { value: fx.bloomStrength },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D map;
+        uniform float opacity;
+        uniform vec2 texelSize;
+        uniform vec3 glowColor;
+        uniform float glowRadius;
+        uniform float glowFalloff;
+        uniform float haloStrength;
+        uniform float bloomStrength;
+        varying vec2 vUv;
+
+        float sampleAlpha(vec2 uv) {
+          return texture2D(map, uv).a;
+        }
+
+        float alphaBoundary(vec2 uv) {
+          float a = sampleAlpha(uv);
+          float grad = length(vec2(dFdx(a), dFdy(a)));
+          return smoothstep(0.0, 0.12, grad);
+        }
+
+        float outerHalo(vec2 uv) {
+          vec2 px = texelSize * glowRadius;
+          float accum = 0.0;
+          float norm = 0.0;
+
+          float w1 = 0.36;
+          accum += w1 * sampleAlpha(uv);
+          norm += w1;
+
+          float w2 = 0.22;
+          vec2 r1 = px * 0.35;
+          accum += w2 * (sampleAlpha(uv + vec2(r1.x, 0.0)) + sampleAlpha(uv - vec2(r1.x, 0.0))
+            + sampleAlpha(uv + vec2(0.0, r1.y)) + sampleAlpha(uv - vec2(0.0, r1.y)));
+          norm += w2 * 4.0;
+
+          float w3 = 0.16;
+          vec2 r2 = px * 0.7;
+          accum += w3 * (sampleAlpha(uv + vec2(r2.x, 0.0)) + sampleAlpha(uv - vec2(r2.x, 0.0))
+            + sampleAlpha(uv + vec2(0.0, r2.y)) + sampleAlpha(uv - vec2(0.0, r2.y))
+            + sampleAlpha(uv + r2) + sampleAlpha(uv + vec2(-r2.x, r2.y))
+            + sampleAlpha(uv + vec2(r2.x, -r2.y)) + sampleAlpha(uv - r2));
+          norm += w3 * 8.0;
+
+          float w4 = 0.12;
+          vec2 r3 = px;
+          accum += w4 * (sampleAlpha(uv + vec2(r3.x, 0.0)) + sampleAlpha(uv - vec2(r3.x, 0.0))
+            + sampleAlpha(uv + vec2(0.0, r3.y)) + sampleAlpha(uv - vec2(0.0, r3.y))
+            + sampleAlpha(uv + r3) + sampleAlpha(uv + vec2(-r3.x, r3.y))
+            + sampleAlpha(uv + vec2(r3.x, -r3.y)) + sampleAlpha(uv - r3));
+          norm += w4 * 8.0;
+
+          float w5 = 0.08;
+          vec2 r4 = px * 1.45;
+          accum += w5 * (sampleAlpha(uv + vec2(r4.x, 0.0)) + sampleAlpha(uv - vec2(r4.x, 0.0))
+            + sampleAlpha(uv + vec2(0.0, r4.y)) + sampleAlpha(uv - vec2(0.0, r4.y))
+            + sampleAlpha(uv + r4) + sampleAlpha(uv + vec2(-r4.x, r4.y))
+            + sampleAlpha(uv + vec2(r4.x, -r4.y)) + sampleAlpha(uv - r4));
+          norm += w5 * 8.0;
+
+          float w6 = 0.06;
+          vec2 r5 = px * 2.0;
+          accum += w6 * (sampleAlpha(uv + vec2(r5.x, 0.0)) + sampleAlpha(uv - vec2(r5.x, 0.0))
+            + sampleAlpha(uv + vec2(0.0, r5.y)) + sampleAlpha(uv - vec2(0.0, r5.y)));
+          norm += w6 * 4.0;
+
+          float halo = pow(clamp(accum / norm, 0.0, 1.0), glowFalloff);
+          float a0 = sampleAlpha(uv);
+          halo *= 1.0 - smoothstep(0.0, 0.08, a0);
+          return halo;
+        }
+
+        void main() {
+          vec4 texColor = texture2D(map, vUv);
+          float a = texColor.a;
+          float edgeTight = alphaBoundary(vUv);
+          float halo = outerHalo(vUv);
+          bool onCard = a >= 0.04;
+
+          if (onCard && edgeTight < 0.15) discard;
+
+          float fringeAlpha = smoothstep(0.0, 0.06, halo);
+          if (!onCard && fringeAlpha < 0.001) discard;
+
+          vec3 displayCol = onCard
+            ? vec3(0.0)
+            : glowColor * halo * haloStrength;
+
+          vec3 bloomEmit = glowColor * edgeTight * bloomStrength;
+          float outAlpha = onCard ? edgeTight : halo * fringeAlpha;
+          gl_FragColor = vec4(displayCol + bloomEmit, outAlpha * opacity);
+        }
+      `,
+      transparent: true,
+      side: THREE.DoubleSide,
+      depthWrite: false,
     });
   }
 
@@ -530,13 +762,27 @@ export async function initGatyaShow({
   }
 
   function setSsrCardShaderOpacity(opacity) {
-    if (ssrMesh) ssrMesh.material.uniforms.opacity.value = opacity;
+    if (ssrFaceMesh) ssrFaceMesh.material.uniforms.opacity.value = opacity;
+    if (ssrEdgeMesh) ssrEdgeMesh.material.uniforms.opacity.value = opacity;
+  }
+
+  function updateSsrCamera() {
+    if (!ssrCamera || !ssrPlaneW) return;
+    const pad = SSR_CANVAS_GLOW_PAD;
+    ssrCamera.left = -ssrPlaneW / 2 - ssrPlaneW * pad;
+    ssrCamera.right = ssrPlaneW / 2 + ssrPlaneW * pad;
+    ssrCamera.top = ssrPlaneH / 2 + ssrPlaneH * pad;
+    ssrCamera.bottom = -ssrPlaneH / 2 - ssrPlaneH * pad;
+    ssrCamera.updateProjectionMatrix();
   }
 
   function initSsrCardRenderer(tex) {
     const aspect = tex.image.width / tex.image.height;
     const planeH = 2;
     const planeW = planeH * aspect;
+    ssrPlaneW = planeW;
+    ssrPlaneH = planeH;
+    const planeGeo = new THREE.PlaneGeometry(planeW, planeH);
 
     ssrRenderer = new THREE.WebGLRenderer({
       canvas: ssrCardCanvas,
@@ -547,33 +793,59 @@ export async function initGatyaShow({
     ssrRenderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     ssrRenderer.setClearColor(0x000000, 0);
     ssrRenderer.outputColorSpace = THREE.SRGBColorSpace;
+    ssrRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+    ssrRenderer.toneMappingExposure = REF_MATCH.CAMERA.exposure;
 
-    ssrScene = new THREE.Scene();
-    ssrCamera = new THREE.OrthographicCamera(-planeW / 2, planeW / 2, planeH / 2, -planeH / 2, 0.1, 10);
+    ssrCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
     ssrCamera.position.z = 1;
-    ssrMesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(planeW, planeH),
-      makeCardGlowMaterial(tex, SSR_CARD_FX),
-    );
-    ssrScene.add(ssrMesh);
+    updateSsrCamera();
+
+    ssrFaceScene = new THREE.Scene();
+    ssrBloomScene = new THREE.Scene();
+
+    ssrFaceMesh = new THREE.Mesh(planeGeo, makeCardFaceMaterial(tex, SSR_FACE_FX));
+    ssrEdgeMesh = new THREE.Mesh(planeGeo, makeCardEdgeMaterial(tex, SSR_EDGE_FX));
+    ssrEdgeMesh.renderOrder = 1;
+
+    ssrFaceScene.add(ssrFaceMesh);
+    ssrBloomScene.add(ssrEdgeMesh);
+
     resizeSsrCardCanvas();
+    const rw = ssrRenderer.domElement.width;
+    const rh = ssrRenderer.domElement.height;
+    ssrBloom = createSelectiveBloomComposer(
+      ssrRenderer,
+      ssrFaceScene,
+      ssrBloomScene,
+      ssrCamera,
+      { w: rw, h: rh },
+      SSR_EDGE_BLOOM,
+    );
   }
 
   function resizeSsrCardCanvas() {
-    if (!ssrRenderer || !ssrMesh) return;
+    if (!ssrRenderer || !ssrFaceMesh) return;
     const cssW = ssrCard.clientWidth || 400;
-    const aspect = ssrMesh.geometry.parameters.height / ssrMesh.geometry.parameters.width;
+    const aspect = ssrFaceMesh.geometry.parameters.height / ssrFaceMesh.geometry.parameters.width;
     const dpr = Math.min(devicePixelRatio, 2);
-    ssrRenderer.setSize(
-      Math.max(1, Math.round(cssW * dpr)),
-      Math.max(1, Math.round(cssW * aspect * dpr)),
-      false,
-    );
+    const pad = SSR_CANVAS_GLOW_PAD;
+    const scale = 1 + 2 * pad;
+    const rw = Math.max(1, Math.round(cssW * dpr * scale));
+    const rh = Math.max(1, Math.round(cssW * aspect * dpr * scale));
+    ssrRenderer.setSize(rw, rh, false);
+    ssrBloom?.resize(rw, rh);
+    updateSsrCamera();
+
+    const cssH = cssW * aspect;
+    ssrCardCanvas.style.width = `${cssW * scale}px`;
+    ssrCardCanvas.style.height = `${cssH * scale}px`;
+    ssrCardCanvas.style.marginLeft = `${-cssW * pad}px`;
+    ssrCardCanvas.style.marginTop = `${-cssH * pad}px`;
   }
 
   function animateSsrCard() {
     requestAnimationFrame(animateSsrCard);
-    if (ssrRenderer) ssrRenderer.render(ssrScene, ssrCamera);
+    if (ssrBloom) ssrBloom.render();
   }
 
   async function loadTexture(url) {
@@ -895,6 +1167,7 @@ export async function initGatyaShow({
     camera.aspect = VIEW_ASPECT;
     camera.updateProjectionMatrix();
     renderer.setSize(w, h, false);
+    hexBloom?.resize(w, h);
     resizeSsrCardCanvas();
   }
 
@@ -903,7 +1176,7 @@ export async function initGatyaShow({
     tickCardsSpin(Math.min(0.05, deltaTime));
     applyState();
     updateDepthSort();
-    renderer.render(scene, camera);
+    hexBloom.render();
   }
 
   // --- init ---
@@ -945,6 +1218,7 @@ export async function initGatyaShow({
   cylinder.add(cylinderTilt);
   cylinderTilt.add(cylinderSpin);
   scene.add(cylinder);
+  hexBloom = createTransparentBloomComposer(renderer, scene, camera, stageSize(), CARD_BLOOM);
   window.onresize = onResize;
   gsap.ticker.add(cardsFrame);
 
@@ -1107,7 +1381,7 @@ export async function initGatyaShow({
     cardsMasterTL.seek(t);
     applyState();
     updateDepthSort();
-    renderer.render(scene, camera);
+    hexBloom.render();
     return measureCardsScreenBBox();
   }
 
