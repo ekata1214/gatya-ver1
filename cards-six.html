@@ -284,15 +284,7 @@
 <body>
   <div id="file-warn" role="alert">
     <div>
-      <p>このページは <code>file://</code> では動きません。</p>
-      <p>ターミナルで <code>python3 serve.py</code> を実行し、<br>
-      次のいずれかを開いてください:</p>
-      <ul style="text-align:left;margin:12px auto;max-width:420px;font-size:14px;line-height:1.8">
-        <li><code>http://localhost:8878/cards-six.html</code></li>
-        <li><code>http://localhost:8878/show</code></li>
-        <li><code>http://localhost:8878/show.html</code></li>
-      </ul>
-      <p style="font-size:12px;color:#aaa">※ <code>cards-six</code>（.html なし）は旧サーバーだと 404 になります</p>
+      <p>ガチャ演出SSRデモサイト</p>
     </div>
   </div>
 
@@ -410,10 +402,9 @@
       }
       } catch (err) {
         console.error(err);
-        window.__initErr = String(err);
         const warn = document.getElementById('file-warn');
         warn.style.display = 'flex';
-        warn.querySelector('div').innerHTML = `<p>読み込みエラー</p><p style="font-size:13px;color:#ccc">${err.message}</p><p style="font-size:12px;margin-top:8px"><code>http://localhost:8878/cards-six.html</code> を開いてください（.html 必須）</p>`;
+        warn.querySelector('div').innerHTML = '<p>読み込みに失敗しました</p><p style="font-size:13px;color:#ccc;margin-top:10px">しばらくしてからページを再読み込みしてください。</p>';
       }
     }
   </script>
