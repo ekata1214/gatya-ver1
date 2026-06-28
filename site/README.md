@@ -12,8 +12,6 @@ python3 serve.py --site   # local preview at http://localhost:8878/
 | Path | Role |
 |------|------|
 | `index.html` | Main show (`cards-six.html` copy, `SHOW_DEV_UI = false`) |
-| `cards-six.html` | Same show (legacy URL) |
-| `ink-sumi.html` | Redirect to show |
 | `src/*.mjs` | Runtime modules only (no compare-panels, no legacy managers) |
 | `assets/ink/` | Ink countdown layers |
 | `assets/fonts/` | Countdown 3D text fonts |

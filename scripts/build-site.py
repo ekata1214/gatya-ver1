@@ -39,8 +39,6 @@ MEDIA_ROOT = [
 
 HTML_PAGES = [
     ('cards-six.html', 'index.html'),
-    ('cards-six.html', 'cards-six.html'),
-    ('ink-sumi.html', 'ink-sumi.html'),
 ]
 
 

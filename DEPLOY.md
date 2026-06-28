@@ -51,7 +51,7 @@ site/ ──GitHub Actions────────────► https://<user>
 
 | カテゴリ | ファイル |
 |----------|----------|
-| HTML | `index.html`, `cards-six.html`, `ink-sumi.html` |
+| HTML | `index.html` |
 | JS | `gatya-unified.mjs`, `countdown-three-overlay.mjs`, `ink-three-overlay.mjs`, `ink-procedural.mjs`, `se.mjs`, `ref-match-config.mjs`, `card-bloom-composer.mjs` |
 | 動画 | `re fire2.mp4`, `white ssr.mp4` |
 | SE | `re fire se.mp3`, `六角筒上昇.mp3`, `ssr card登場.mp3`, `和太鼓でドン.mp3`, `LAST.mp3`, `white ssr.mp3` |
@@ -84,7 +84,7 @@ python3 scripts/build-site.py
 
 1. `site/` をクリア（`site/README.md` は残す）
 2. 上記マニフェストのファイルをリポジトリルートからコピー
-3. `cards-six.html` を `index.html` にもコピー（GitHub Pages のルートエントリ）
+3. `cards-six.html` を `index.html` としてコピー（GitHub Pages のルートエントリ）
 4. `.nojekyll` を書き出し
 
 ### ローカルプレビュー
@@ -144,7 +144,7 @@ https://<github-username>.github.io/<repo-name>/
 
 例: リポジトリが `gatya-ver1` なら `https://amon.github.io/gatya-ver1/`
 
-`index.html` がルートに配信される。旧 URL 互換のため `cards-six.html` も同梱されている。
+`index.html` がルートに配信される（ソースは `cards-six.html`）。
 
 ---
 

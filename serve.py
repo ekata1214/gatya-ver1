@@ -19,13 +19,21 @@ ALIASES = {
     '/ref/': '/reference-dual-viewer.html',
 }
 
+SITE_ALIASES = {
+    **ALIASES,
+    '/cards-six': '/index.html',
+    '/cards-six/': '/index.html',
+}
+
 
 class GatyaHandler(SimpleHTTPRequestHandler):
+    aliases = ALIASES
+
     def do_GET(self):
         path = self.path.split('?', 1)[0]
-        if path in ALIASES:
+        if path in self.aliases:
             qs = self.path.split('?', 1)
-            self.path = ALIASES[path] + (f'?{qs[1]}' if len(qs) > 1 else '')
+            self.path = self.aliases[path] + (f'?{qs[1]}' if len(qs) > 1 else '')
         return super().do_GET()
 
     def log_message(self, fmt, *args):
@@ -48,12 +56,15 @@ def main():
 
     os.chdir(root)
     label = 'site/' if args.site else 'repo root'
+    handler = GatyaHandler
+    if args.site:
+        handler = type('SiteHandler', (GatyaHandler,), {'aliases': SITE_ALIASES})
     print(f'Gatya server ({label}): http://localhost:{PORT}/')
     if args.site:
         print('  production bundle (index.html)')
     else:
         print('  aliases: /show  /gatya  /cards-six  /ref')
-    HTTPServer(('', PORT), GatyaHandler).serve_forever()
+    HTTPServer(('', PORT), handler).serve_forever()
 
 
 if __name__ == '__main__':
