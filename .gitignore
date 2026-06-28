@@ -3,6 +3,7 @@
 *.swp
 .cursor/*
 !.cursor/commands
+!.cursor/commands/**
 !.cursor/rules/
 !.cursor/rules/**
 
