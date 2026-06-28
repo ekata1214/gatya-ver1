@@ -1,0 +1,56 @@
+---
+description: cards-six の開発ビュー / 本番ビュー切替（SHOW_DEV_UI）
+globs: cards-six.html,src/gatya-unified.mjs
+alwaysApply: false
+---
+
+# 開発ビュー / 本番ビューの切替
+
+## 切替方法（1フラグのみ）
+
+`cards-six.html` のインライン script 内:
+
+```javascript
+const SHOW_DEV_UI = false; // 本番
+const SHOW_DEV_UI = true;  // 開発（比較UI）
+```
+
+`document.body.classList.toggle('dev-ui', SHOW_DEV_UI)` が CSS と連動する。**他の場所にフラグを増やさない。**
+
+## モード比較
+
+| | 本番 `false` | 開発 `true` |
+|---|---|---|
+| 上部 before/after ボタン | 非表示 | 表示 |
+| 左右説明パネル | 非表示 | 表示（幅 ≥960px） |
+| ステージ幅 | 全幅 | パネル分を除く |
+| 初回ロード | 自動再生しない | `after` で自動再生 |
+| 赤ボタン初回文言 | **ガチャを引く** | 非表示（再生中） |
+| 演出完了後ボタン | **もう一度引く** | **もう一度引く** |
+
+## 本番フロー（`SHOW_DEV_UI = false`）
+
+1. ページ表示 → 炎背景 + **ガチャを引く** ボタン
+2. クリック → `playShow()`、ボタンは非表示
+3. ホワイトアウト完了 → **もう一度引く** が表示
+4. `initGatyaShow({ autoPlay: false })` — `cards-six.html` が `SHOW_DEV_UI` を渡す
+
+## 開発フロー（`SHOW_DEV_UI = true`）
+
+1. `mountComparePanels` + before/after ピッカーを有効化
+2. `show.playShow('after')` で即比較開始
+3. ピッカー切替で `playShow(mode)` 再実行
+4. `resolveGatherMode` は `compareMode` を返す
+
+## 実装の所在（触る場所）
+
+- **フラグ**: `cards-six.html` — `SHOW_DEV_UI` のみ
+- **CSS**: `body.dev-ui` / `body:not(.dev-ui)` — パネル・ピッカー・`#stage-wrap` 幅
+- **再生ボタン**: `src/gatya-unified.mjs` — `hideReplayBtn` / `showReplayBtn` / `onShowFinaleComplete`
+- **ラベル**: `replayLabels`（既定: ガチャを引く / もう一度引く）
+
+## 注意
+
+- 本番確認前は **`SHOW_DEV_UI = false`** に戻す
+- JS 変更時は `cards-six.html` の **`ASSET_V`** を更新
+- 比較UIの文言・SVG は `src/compare-panels.mjs`（開発モード時のみロード）

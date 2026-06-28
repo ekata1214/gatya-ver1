@@ -472,7 +472,7 @@ export function initCountdownOverlay(options) {
         items.LAST.visible = false;
         scene.add(items.LAST);
 
-        if (replayBtn) {
+        if (replayBtn && options.bindReplayBtn !== false) {
           replayBtn.hidden = false;
           replayBtn.onclick = options.onReplay ?? play;
         }

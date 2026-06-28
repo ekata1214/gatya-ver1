@@ -20,6 +20,8 @@ export async function initGatyaShow({
   replayBtn,
   resolveGatherMode,
   skipCountdown = false,
+  autoPlay = true,
+  replayLabels = { start: 'ガチャを引く', again: 'もう一度引く' },
 }) {
   CustomEase.create('heavy', 'M0,0 C0.16,1 0.3,1 1,1');
   CustomEase.create('heavyIO', 'M0,0 C0.45,0 0.2,1 1,1');
@@ -54,6 +56,28 @@ export async function initGatyaShow({
   let cardsMasterTL = null;
   let cardsAnimating = true;
   let countdownCtrl = null;
+  let showHasCompleted = false;
+
+  function hideReplayBtn() {
+    if (replayBtn) replayBtn.hidden = true;
+  }
+
+  function showReplayBtn() {
+    if (!replayBtn) return;
+    replayBtn.textContent = showHasCompleted ? replayLabels.again : replayLabels.start;
+    replayBtn.hidden = false;
+  }
+
+  function onReplayClick() {
+    hideReplayBtn();
+    resetFireIntro();
+    playShow();
+  }
+
+  function onShowFinaleComplete() {
+    showHasCompleted = true;
+    showReplayBtn();
+  }
 
   const CARD_W = REF_MATCH.CARD_W;
   const CARD_H = CARD_W * 1.5;
@@ -1130,6 +1154,7 @@ export async function initGatyaShow({
   }
 
   function playShow(mode) {
+    hideReplayBtn();
     if (mode) setGatherMode(mode);
     else setGatherMode(resolveGather());
     cupRiseMode = 'after';
@@ -1263,10 +1288,7 @@ export async function initGatyaShow({
     stageEl,
     fireVideoEl: fireVideo,
     replayBtn,
-    onReplay: () => {
-      resetFireIntro();
-      playShow();
-    },
+    bindReplayBtn: false,
     autoplay: false,
     onDigitStart: (char) => {
       if (char === 'LAST') {
@@ -1317,6 +1339,7 @@ export async function initGatyaShow({
         tl.add(() => startSsrBounce(), '<');
         tl.to({}, { duration: activePostShow.finaleHold, ease: 'none' }, '>');
         tl.to(whiteoutEl, { opacity: 1, duration: activePostShow.whiteoutDur, ease: POST }, '>');
+        tl.add(() => onShowFinaleComplete());
       });
     },
     onComplete: () => {},
@@ -1324,15 +1347,13 @@ export async function initGatyaShow({
 
   countdownCtrl = await countdownPromise;
 
-  if (replayBtn) {
-    replayBtn.hidden = false;
-    replayBtn.onclick = () => {
-      resetFireIntro();
-      playShow();
-    };
-  }
+  if (replayBtn) replayBtn.onclick = onReplayClick;
 
   resetCardsShow();
+
+  if (!autoPlay) {
+    showReplayBtn();
+  }
 
   const _measurePt = new THREE.Vector3();
   function measureCardsScreenBBox() {

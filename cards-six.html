@@ -31,7 +31,14 @@
       overflow-y: auto;
     }
     @media (min-width: 960px) {
-      .side-panel { display: flex; }
+      body.dev-ui .side-panel { display: flex; }
+    }
+    body:not(.dev-ui) .side-panel,
+    body:not(.dev-ui) #compare-picker {
+      display: none !important;
+    }
+    body:not(.dev-ui) #stage-wrap {
+      width: min(100vw, calc(100vh * 1080 / 1920));
     }
     .side-panel__card {
       max-width: 280px;
@@ -287,7 +294,7 @@
         </div>
       </div>
       <div id="whiteout" aria-hidden="true"></div>
-      <button id="replay" type="button" hidden>もう一度引く</button>
+      <button id="replay" type="button">ガチャを引く</button>
       <div id="compare-picker" role="group" aria-label="before / after 比較">
         <button type="button" data-mode="before">before</button>
         <button type="button" data-mode="after" class="active">after</button>
@@ -311,33 +318,41 @@
     if (location.protocol === 'file:') {
       document.body.classList.add('is-file-protocol');
     } else {
-      const ASSET_V = '20260628-ssr-glow-strong';
+      /** false = 本番（比較UI非表示・初回は「ガチャを引く」） / true = 開発者向け before/after */
+      const SHOW_DEV_UI = false;
+      document.body.classList.toggle('dev-ui', SHOW_DEV_UI);
+
+      const ASSET_V = '20260628-replay-ux';
       try {
       const { initGatyaShow } = await import(`./src/gatya-unified.mjs?v=${ASSET_V}`);
-      const { mountComparePanels } = await import(`./src/compare-panels.mjs?v=${ASSET_V}`);
 
-      const comparePicker = document.getElementById('compare-picker');
-      const compareButtons = [...comparePicker.querySelectorAll('button')];
       let compareMode = 'after';
+      let panelCtrl = null;
 
-      const panelCtrl = mountComparePanels({
-        leftEl: document.getElementById('side-left'),
-        rightEl: document.getElementById('side-right'),
-      });
+      if (SHOW_DEV_UI) {
+        const { mountComparePanels } = await import(`./src/compare-panels.mjs?v=${ASSET_V}`);
+        const comparePicker = document.getElementById('compare-picker');
+        const compareButtons = [...comparePicker.querySelectorAll('button')];
 
-      function selectCompare(mode) {
-        if (mode !== 'before' && mode !== 'after') return;
-        compareMode = mode;
-        compareButtons.forEach((btn) => {
-          btn.classList.toggle('active', btn.dataset.mode === mode);
+        panelCtrl = mountComparePanels({
+          leftEl: document.getElementById('side-left'),
+          rightEl: document.getElementById('side-right'),
         });
-        panelCtrl.setActive(mode);
-        show.playShow(mode);
-      }
 
-      compareButtons.forEach((btn) => {
-        btn.addEventListener('click', () => selectCompare(btn.dataset.mode));
-      });
+        function selectCompare(mode) {
+          if (mode !== 'before' && mode !== 'after') return;
+          compareMode = mode;
+          compareButtons.forEach((btn) => {
+            btn.classList.toggle('active', btn.dataset.mode === mode);
+          });
+          panelCtrl.setActive(mode);
+          show.playShow(mode);
+        }
+
+        compareButtons.forEach((btn) => {
+          btn.addEventListener('click', () => selectCompare(btn.dataset.mode));
+        });
+      }
 
       const show = await initGatyaShow({
         stageEl: document.getElementById('stage'),
@@ -352,10 +367,17 @@
         darkenEl: document.getElementById('darken'),
         whiteoutEl: document.getElementById('whiteout'),
         replayBtn: document.getElementById('replay'),
-        resolveGatherMode: () => compareMode,
+        resolveGatherMode: () => (SHOW_DEV_UI ? compareMode : 'after'),
+        autoPlay: SHOW_DEV_UI,
       });
 
-      selectCompare('after');
+      if (SHOW_DEV_UI) {
+        compareMode = 'after';
+        panelCtrl.setActive('after');
+        show.playShow('after');
+      } else {
+        show.setGatherMode('after');
+      }
       } catch (err) {
         console.error(err);
         window.__initErr = String(err);

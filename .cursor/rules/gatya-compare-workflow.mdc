@@ -6,6 +6,9 @@ alwaysApply: false
 
 # Gatya 演出ワークフロー
 
+## 開発ビューが必要なとき
+比較UI（before/after・左右パネル）は **`SHOW_DEV_UI = true`** のときのみ有効。切替手順は **`gatya-dev-production-toggle`** ルール参照。本番は `false`。
+
 ## エントリ
 - **`cards-six.html`** → `src/gatya-unified.mjs`
 - **`http://localhost:8878/cards-six.html`**（`file://` 不可）

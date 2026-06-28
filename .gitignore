@@ -2,6 +2,7 @@
 .DS_Store
 *.swp
 .cursor/*
+!.cursor/commands
 !.cursor/rules/
 !.cursor/rules/**
 
