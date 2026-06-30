@@ -34,7 +34,7 @@ export async function initGatyaShow({
   const HEAVY_IO = 'heavyIO';
   const POST = 'post';
 
-  const se = createSE({ volume: 0.95 });
+  const se = createSE({ volume: 1.05 });
   let seReady = false;
 
   async function bootSE() {
@@ -88,8 +88,12 @@ export async function initGatyaShow({
 
   function onReplayClick() {
     hideReplayBtn();
-    resetFireIntro();
-    playShow();
+    bootSE().then(() => {
+      se.play('uiClick');
+      se.play('gachaStart');
+      resetFireIntro();
+      playShow();
+    });
   }
 
   function onShowFinaleComplete() {
@@ -1068,6 +1072,10 @@ export async function initGatyaShow({
       onUpdate: applyCardsMotionBlur,
     }, d + T.slide * 0.55);
 
+    tl.add(() => se.play('gather'), d);
+    tl.add(() => se.play('hexLock'), t1);
+    tl.add(() => se.startTensionReel({ fadeIn: 0.15 }), t2);
+
     tl.to(anim, {
       rotX: ROT.poseX,
       rotZ: ROT.poseZ,
@@ -1128,7 +1136,10 @@ export async function initGatyaShow({
       duration: T.rise * 0.65,
       ease: segEase('riseFade'),
     }, t3);
-    tl.add(() => se.play('rise'), t3);
+    tl.add(() => {
+      se.stopTensionReel({ fade: 0.12 });
+      se.play('rise');
+    }, t3);
 
     tl.to(spin, {
       y: `+=${CLOSE_SPIN_FAST * Math.PI * 2}`,
@@ -1203,12 +1214,14 @@ export async function initGatyaShow({
         setSsrCardShaderOpacity(this.targets()[0].v);
       },
       onComplete: () => {
+        se.play('ssrLand');
         startSsrBounce();
       },
     });
   }
 
   function startInkPhase() {
+    se.stopTensionReel({ fade: 0.1 });
     showInkLayer();
     resetInkVideo();
     gsap.set([darkenEl, whiteoutEl], { opacity: 0 });
@@ -1243,7 +1256,8 @@ export async function initGatyaShow({
       gsap.set(fireVideo, { opacity: 0 });
       try { fireVideo.pause(); } catch (_) {}
       playVideo(whiteSsrVideo);
-      se.startWhiteSsr({ fadeIn: activePostShow.whiteRevealDur });
+      se.startWhiteSsr();
+      se.crossfadeToBgmClimax({ fadeIn: activePostShow.whiteRevealDur + 0.4 });
       ssrBounceTween?.kill();
       setSsrCardCenter();
       gsap.set(ssrCard, { opacity: 1 });
@@ -1268,7 +1282,10 @@ export async function initGatyaShow({
       }, 0);
       finaleTL.add(() => startSsrBounce(), 0);
     } else {
-      finaleTL.add(() => se.fadeOutFire({ fade: activePostShow.fireFadeOut }), 0);
+      finaleTL.add(() => {
+        se.play('darkenDrop');
+        se.fadeOutFire({ fade: activePostShow.fireFadeOut });
+      }, 0);
       finaleTL.to(darkenEl, { opacity: 1, duration: activePostShow.darkenDur, ease: POST }, 0);
       finaleTL.add(beginWhiteIn, '>');
       finaleTL.to(darkenEl, { opacity: 0, duration: revealDur, ease: POST }, '<');
@@ -1285,7 +1302,11 @@ export async function initGatyaShow({
     }
 
     finaleTL.to({}, { duration: activePostShow.finaleHold, ease: 'none' }, '>');
-    finaleTL.to(whiteoutEl, { opacity: 1, duration: activePostShow.whiteoutDur, ease: POST }, '>');
+    finaleTL.add(() => {
+      se.play('whiteout');
+      se.stopAllBgm({ fade: activePostShow.whiteoutDur });
+    }, '>');
+    finaleTL.to(whiteoutEl, { opacity: 1, duration: activePostShow.whiteoutDur, ease: POST }, '<');
     finaleTL.add(() => onShowFinaleComplete());
   }
 
@@ -1311,7 +1332,8 @@ export async function initGatyaShow({
     runWhiteFinale({ skipDarken: true });
   }
 
-  function playShow(mode) {
+  async function playShow(mode) {
+    await bootSE();
     hideReplayBtn();
     showSkipBtn();
     finaleRarity = rollRarity(forcedRarity);
@@ -1332,7 +1354,9 @@ export async function initGatyaShow({
     gsap.set(ssrCard, { opacity: 0 });
     setSsrCardShaderOpacity(0);
     if (fireVideo.paused) playVideo(fireVideo);
-    if (seReady) se.startFire();
+    se.resetShow();
+    se.startFire();
+    se.startBgmMain({ fadeIn: 0.4, v: 0.78 });
     cardsMasterTL = buildCardsTimeline();
   }
 
@@ -1460,10 +1484,7 @@ export async function initGatyaShow({
     bindReplayBtn: false,
     autoplay: false,
     onDigitStart: (char) => {
-      if (char === 'LAST') {
-        se.play('last');
-        return;
-      }
+      if (char === 'LAST') return;
       if (lastInkLocked) return;
       syncInkToDigit(char);
       se.play('taiko');

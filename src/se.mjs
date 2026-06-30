@@ -1,22 +1,58 @@
+const ASSET_ROOT = './assets/se/';
+const SE2_ROOT = './assets/se2/';
+
 const ASSETS = {
-  fire: './re fire se.mp3',
-  rise: './六角筒上昇.mp3',
-  ssrIn: './ssr card登場.mp3',
-  taiko: './和太鼓でドン.mp3',
-  last: './LAST.mp3',
-  whiteSsr: './white ssr.mp3',
+  fire: `${ASSET_ROOT}fire.mp3`,
+  cardAppear: `${ASSET_ROOT}card-appear.mp3`,
+  gather: `${SE2_ROOT}03_sparkle_shiny_02.wav`,
+  hexLock: `${SE2_ROOT}03_sparkle_shiny_03.wav`,
+  tensionReel: `${ASSET_ROOT}tension-reel.mp3`,
+  rise: `${SE2_ROOT}08_sparkle_kira_03.wav`,
+  ssrIn: `${ASSET_ROOT}ssr-in.mp3`,
+  ssrLand: `${SE2_ROOT}10_ball_hit_kon_03.wav`,
+  taiko: `${ASSET_ROOT}taiko.mp3`,
+  darkenDrop: `${ASSET_ROOT}darken-drop.mp3`,
+  whiteSsr: `${ASSET_ROOT}white-ssr.mp3`,
+  whiteout: `${SE2_ROOT}03_sparkle_shiny_02.wav`,
+  gachaStart: `${ASSET_ROOT}gacha-start.mp3`,
+  uiClick: `${ASSET_ROOT}ui-click.mp3`,
+  bgmMain: `${ASSET_ROOT}bgm-main.mp3`,
+};
+
+/** Per-shot gain (× master). */
+const SHOT_VOL = {
+  cardAppear: 0.78,
+  gather: 0.68,
+  hexLock: 0.72,
+  rise: 0.88,
+  ssrIn: 0.58,
+  ssrLand: 0.95,
+  taiko: 0.98,
+  darkenDrop: 0.75,
+  whiteSsr: 0.88,
+  whiteout: 0.8,
+  gachaStart: 0.9,
+  uiClick: 0.5,
 };
 
 const FIRE_INTRO_KEY = 'gatya-fire-intro-done';
-const SE_ENABLED = false;
+const SE_ENABLED = true;
 
 const noopSE = {
   unlock: async () => {},
   play: () => {},
+  playCombo: () => {},
   startFire: () => {},
   resumeFire: () => {},
   fadeOutFire: () => {},
+  startTensionReel: () => {},
+  stopTensionReel: () => {},
   startWhiteSsr: () => {},
+  startBgmMain: () => {},
+  rampBgmMain: () => {},
+  crossfadeToBgmClimax: () => {},
+  stopAllBgm: () => {},
+  resetShow: () => {},
   setVolume: () => {},
   saveFireState: () => {},
 };
@@ -28,7 +64,8 @@ export function createSE({ volume = 1 } = {}) {
   let unlocked = false;
   const clips = new Map();
   let fireTween = null;
-  let whiteTween = null;
+  let mainBgmTween = null;
+  let reelTween = null;
 
   function clip(key) {
     if (!clips.has(key)) {
@@ -81,7 +118,7 @@ export function createSE({ volume = 1 } = {}) {
         a.addEventListener('canplaythrough', done, { once: true });
         a.addEventListener('error', done, { once: true });
         a.load();
-        setTimeout(done, 1500);
+        setTimeout(done, 2500);
       })),
     );
   }
@@ -91,12 +128,54 @@ export function createSE({ volume = 1 } = {}) {
     const src = ASSETS[key];
     if (!src) return;
     const a = new Audio(src);
-    a.volume = vol(v);
+    const gain = SHOT_VOL[key] ?? 1;
+    a.volume = vol(v * gain);
     const p = a.play();
     if (p?.catch) p.catch(() => {});
   }
 
-  function startFire({ v = 0.75, resume = false } = {}) {
+  function playCombo(names, { v = 1, stagger = 0 } = {}) {
+    const list = Array.isArray(names) ? names : [names];
+    list.forEach((name, i) => {
+      const delay = stagger * i * 1000;
+      if (delay > 0) setTimeout(() => playShot(name, { v }), delay);
+      else playShot(name, { v });
+    });
+  }
+
+  function startLoop(key, {
+    v = 1,
+    fadeIn = 0,
+    resume = false,
+    tweenRef = { current: null },
+  } = {}) {
+    if (!unlocked) return;
+    const a = clip(key);
+    a.loop = true;
+    if (tweenRef.current) {
+      gsap?.killTweensOf?.(a);
+      tweenRef.current = null;
+    }
+    if (!resume) {
+      try { a.currentTime = 0; } catch (_) {}
+    }
+    a.volume = fadeIn > 0 ? 0 : vol(v);
+    const p = a.play();
+    if (p?.catch) p.catch(() => {});
+    if (fadeIn > 0) fadeAudio(a, vol(v), fadeIn);
+  }
+
+  function fadeOutLoop(key, { fade = 1, tweenRef = { current: null } } = {}) {
+    const a = clips.get(key);
+    if (!a) return;
+    gsap?.killTweensOf?.(a);
+    fadeAudio(a, 0, fade, () => {
+      try { a.pause(); } catch (_) {}
+      tweenRef.current = null;
+    });
+  }
+
+  function startFire({ v = 0.72, resume = false } = {}) {
     if (!unlocked) return;
     const a = clip('fire');
     a.loop = true;
@@ -128,7 +207,7 @@ export function createSE({ volume = 1 } = {}) {
     if (fadeIn > 0) fadeAudio(a, vol(v), fadeIn);
   }
 
-  function resumeFire({ v = 0.75 } = {}) {
+  function resumeFire({ v = 0.72 } = {}) {
     unlocked = true;
     startFire({ v, resume: true });
   }
@@ -140,35 +219,73 @@ export function createSE({ volume = 1 } = {}) {
   }
 
   function fadeOutFire({ fade = 3 } = {}) {
-    const a = clips.get('fire');
-    if (!a) return;
-    gsap?.killTweensOf?.(a);
-    fadeAudio(a, 0, fade, () => {
-      try { a.pause(); } catch (_) {}
-    });
+    fadeOutLoop('fire', { fade, tweenRef: { current: fireTween } });
   }
 
-  function startWhiteSsr({ fadeIn = 0.6, v = 0.85 } = {}) {
+  function startTensionReel({ fadeIn = 0.2, v = 0.3 } = {}) {
+    startLoop('tensionReel', { v, fadeIn, tweenRef: { current: reelTween } });
+  }
+
+  function stopTensionReel({ fade = 0.22 } = {}) {
+    fadeOutLoop('tensionReel', { fade, tweenRef: { current: reelTween } });
+  }
+
+  function startWhiteSsr() {
     if (!unlocked) return;
-    const a = clip('whiteSsr');
-    a.loop = false;
-    if (whiteTween) {
+    playShot('whiteSsr');
+  }
+
+  function stopBgmMain({ fade = 0.6 } = {}) {
+    fadeOutLoop('bgmMain', { fade, tweenRef: { current: mainBgmTween } });
+  }
+
+  function startBgmMain({ fadeIn = 0.45, v = 0.78 } = {}) {
+    if (!unlocked) return;
+    startLoop('bgmMain', { v, fadeIn, tweenRef: { current: mainBgmTween } });
+  }
+
+  function rampBgmMain({ to = 0.68, duration = 7, ease = 'power2.in' } = {}) {
+    const a = clips.get('bgmMain');
+    if (!a || a.paused) return;
+    gsap?.killTweensOf?.(a);
+    gsap?.to?.(a, { volume: vol(to), duration, ease });
+  }
+
+  /** 白演出 — 同一BGMを頭出しせず音量だけ盛る */
+  function crossfadeToBgmClimax({ fadeIn = 1.0, v = 0.78 } = {}) {
+    rampBgmMain({ to: v, duration: fadeIn, ease: 'power2.out' });
+  }
+
+  function stopAllBgm({ fade = 1.0 } = {}) {
+    stopBgmMain({ fade });
+    stopTensionReel({ fade: fade * 0.4 });
+  }
+
+  function resetShow() {
+    ['bgmMain', 'tensionReel'].forEach((key) => {
+      const a = clips.get(key);
+      if (!a) return;
       gsap?.killTweensOf?.(a);
-      whiteTween = null;
-    }
-    try { a.currentTime = 0; } catch (_) {}
-    a.volume = 0;
-    const p = a.play();
-    if (p?.catch) p.catch(() => {});
-    fadeAudio(a, vol(v), fadeIn);
+      try { a.pause(); a.currentTime = 0; } catch (_) {}
+      a.volume = 0;
+    });
+    mainBgmTween = null;
+    reelTween = null;
   }
 
   function play(name) {
     switch (name) {
+      case 'cardAppear': playShot('cardAppear'); break;
+      case 'gather': playShot('gather'); break;
+      case 'hexLock': playShot('hexLock'); break;
       case 'rise': playShot('rise'); break;
       case 'ssrIn': playShot('ssrIn'); break;
+      case 'ssrLand': playShot('ssrLand'); break;
       case 'taiko': playShot('taiko'); break;
-      case 'last': playShot('last'); break;
+      case 'darkenDrop': playShot('darkenDrop'); break;
+      case 'whiteout': playShot('whiteout'); break;
+      case 'gachaStart': playShot('gachaStart'); break;
+      case 'uiClick': playShot('uiClick'); break;
       default: break;
     }
   }
@@ -177,7 +294,24 @@ export function createSE({ volume = 1 } = {}) {
     master = Math.max(0, Math.min(1.5, v));
   }
 
-  return { unlock, play, startFire, resumeFire, fadeOutFire, startWhiteSsr, setVolume, saveFireState };
+  return {
+    unlock,
+    play,
+    playCombo,
+    startFire,
+    resumeFire,
+    fadeOutFire,
+    startTensionReel,
+    stopTensionReel,
+    startWhiteSsr,
+    startBgmMain,
+    rampBgmMain,
+    crossfadeToBgmClimax,
+    stopAllBgm,
+    resetShow,
+    setVolume,
+    saveFireState,
+  };
 }
 
 export function resetFireIntro() {

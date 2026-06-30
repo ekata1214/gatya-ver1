@@ -25,12 +25,6 @@ MEDIA_ROOT = [
     're fire2.mp4',
     'ink test2.mp4',
     'white ssr.mp4',
-    're fire se.mp3',
-    '六角筒上昇.mp3',
-    'ssr card登場.mp3',
-    '和太鼓でドン.mp3',
-    'LAST.mp3',
-    'white ssr.mp3',
     'blue card.png',
     'silver card.png',
     'rainbow card.png',
@@ -110,6 +104,8 @@ def build() -> None:
     print('assets/')
     copy_tree('assets/ink', 'assets/ink')
     copy_tree('assets/fonts', 'assets/fonts')
+    copy_tree('assets/se', 'assets/se')
+    copy_tree('assets/se2', 'assets/se2')
 
     write_no_jekyll()
     print(f'\nDone → {SITE}')
